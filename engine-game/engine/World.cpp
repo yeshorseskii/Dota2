@@ -7,7 +7,11 @@ void World::Simulate() {
     time += tickInterval;
     ++tick;
 
-    // 1) continuous update
+    // 0) merge entities created since the last tick before iterating
+    flushPending();
+
+    // 1) continuous update (entities created here go to the pending buffer and
+    //    are merged next tick — entities_ stays stable during the loop)
     for (auto& e : entities_)
         if (!e->removed) e->Update(tickInterval);
 
