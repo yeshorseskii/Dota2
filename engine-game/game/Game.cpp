@@ -4,6 +4,7 @@
 #include "Entities.hpp"
 #include "engine/ConVar.hpp"
 #include "third_party/raygui.h"
+#include "rlgl.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -11,6 +12,34 @@
 namespace game {
 
 MobaGame* g_game = nullptr;
+
+// ---- small color + model helpers for the low-poly unit models --------------
+static Color shade(Color c, float f) {
+    return Color{(unsigned char)eng::Clampf(c.r * f, 0, 255),
+                 (unsigned char)eng::Clampf(c.g * f, 0, 255),
+                 (unsigned char)eng::Clampf(c.b * f, 0, 255), c.a};
+}
+static Color mix(Color a, Color b, float t) {
+    return Color{(unsigned char)(a.r + (b.r - a.r) * t),
+                 (unsigned char)(a.g + (b.g - a.g) * t),
+                 (unsigned char)(a.b + (b.b - a.b) * t), 255};
+}
+static void box(Vector3 c, float w, float h, float d, Color col) { DrawCube(c, w, h, d, col); }
+static void boxEdge(Vector3 c, float w, float h, float d, Color col) { DrawCubeWires(c, w, h, d, col); }
+
+// Push a local frame at (pos on ground) rotated by yaw so a model can be drawn
+// in local space (origin at the feet, +Z forward, +Y up).
+static void beginModel(Vector3 pos, float yawDeg) {
+    rlPushMatrix();
+    rlTranslatef(pos.x, 0.f, pos.z);
+    rlRotatef(yawDeg, 0.f, 1.f, 0.f);
+}
+static void endModel() { rlPopMatrix(); }
+
+static void updateYaw(CombatEntity& u, Vector3 oldPos) {
+    float dx = u.pos.x - oldPos.x, dz = u.pos.z - oldPos.z;
+    if (dx * dx + dz * dz > 1e-6f) u.yaw = atan2f(dx, dz) * RAD2DEG;
+}
 
 // Copy tunable stats from a UnitDef onto a live combat entity.
 static void applyDef(CombatEntity& u, const UnitDef& d) {
@@ -138,10 +167,16 @@ void Hero::Update(float dt) {
     }
     combatTick(dt);
 
+    Vector3 o = pos;
     if (isPlayer) {
         if (hasMoveOrder) {
             pos = eng::MoveToward(pos, moveOrder, moveSpeed * dt);
+            updateYaw(*this, o);
             if (eng::Dist(pos, moveOrder) < 0.6f) hasMoveOrder = false;
+        } else {
+            // face the nearest enemy when standing and fighting
+            if (CombatEntity* e = g_game->NearestEnemy(team, pos, attackRange + 4.f))
+                yaw = atan2f(e->pos.x - pos.x, e->pos.z - pos.z) * RAD2DEG;
         }
         return;
     }
@@ -149,16 +184,22 @@ void Hero::Update(float dt) {
     // enemy AI: retreat when low, else push and fight along the lane.
     if (hp < maxHp * 0.30f) {
         pos = eng::MoveToward(pos, spawnPos, moveSpeed * dt);
+        updateYaw(*this, o);
         castW();
         return;
     }
     CombatEntity* aggro = g_game->NearestEnemy(team, pos, 34.f);
     if (aggro) {
         if (qCd <= 0.f && eng::Dist(pos, aggro->pos) < 36.f) castQ(aggro->pos);
-        if (eng::Dist(pos, aggro->pos) > attackRange * 0.9f)
+        if (eng::Dist(pos, aggro->pos) > attackRange * 0.9f) {
             pos = eng::MoveToward(pos, aggro->pos, moveSpeed * dt);
+            updateYaw(*this, o);
+        } else {
+            yaw = atan2f(aggro->pos.x - pos.x, aggro->pos.z - pos.z) * RAD2DEG;
+        }
     } else {
         pos = eng::MoveToward(pos, g_game->LaneWp(g_game->LaneCount() - 3), moveSpeed * dt);
+        updateYaw(*this, o);
     }
 }
 
@@ -169,18 +210,43 @@ void Hero::Render() {
         DrawCircle3D(s, radius + 0.6f, Vector3{1, 0, 0}, 90.f, Color{col.r, col.g, col.b, 120});
         return;
     }
-    if (isPlayer) {
-        Vector3 ring = pos; ring.y = 0.1f;
-        DrawCircle3D(ring, radius + 1.2f, Vector3{1, 0, 0}, 90.f, RAYWHITE);
-        if (hasMoveOrder) {
-            Vector3 m = moveOrder; m.y = 0.1f;
-            DrawCircle3D(m, 0.8f, Vector3{1, 0, 0}, 90.f, Color{90, 200, 110, 255});
-        }
+    // ground markers
+    Vector3 ring = pos; ring.y = 0.1f;
+    DrawCircle3D(ring, radius + 1.0f, Vector3{1, 0, 0}, 90.f,
+                 isPlayer ? RAYWHITE : shade(col, 0.7f));
+    if (isPlayer && hasMoveOrder) {
+        Vector3 m = moveOrder; m.y = 0.1f;
+        DrawCircle3D(m, 0.8f, Vector3{1, 0, 0}, 90.f, Color{90, 200, 110, 255});
     }
-    DrawCylinder(pos, radius, radius * 0.7f, height, 14, col);
-    DrawCylinderWires(pos, radius, radius * 0.7f, height, 14,
-                      shieldTimer > 0.f ? Color{120, 220, 255, 255} : RAYWHITE);
-    DrawSphere(Vector3{pos.x, height + 0.9f, pos.z}, 0.9f, col);
+
+    const float r = radius, h = height;
+    Color leg = shade(col, 0.55f);
+    Color skin = mix(col, RAYWHITE, 0.75f);
+    Color metal = Color{200, 205, 215, 255};
+    Color trim = shade(col, 0.75f);
+
+    beginModel(pos, yaw);
+    // legs
+    box({-0.42f * r, 0.18f * h, 0}, 0.34f * r, 0.36f * h, 0.36f * r, leg);
+    box({0.42f * r, 0.18f * h, 0}, 0.34f * r, 0.36f * h, 0.36f * r, leg);
+    // torso
+    box({0, 0.55f * h, 0}, 1.15f * r, 0.42f * h, 0.72f * r, col);
+    boxEdge({0, 0.55f * h, 0}, 1.15f * r, 0.42f * h, 0.72f * r, shade(col, 0.6f));
+    // belt
+    box({0, 0.36f * h, 0}, 1.18f * r, 0.06f * h, 0.75f * r, trim);
+    // shoulders
+    DrawSphere({-0.72f * r, 0.72f * h, 0}, 0.34f * r, trim);
+    DrawSphere({0.72f * r, 0.72f * h, 0}, 0.34f * r, trim);
+    // head + visor
+    DrawSphere({0, 0.9f * h, 0}, 0.32f * r, skin);
+    box({0, 0.9f * h, 0.26f * r}, 0.4f * r, 0.12f * h, 0.14f * r, shade(col, 0.5f));
+    // sword in right hand
+    box({0.95f * r, 0.62f * h, 0.1f * r}, 0.1f * r, 0.72f * h, 0.1f * r, metal);
+    box({0.95f * r, 0.30f * h, 0.1f * r}, 0.34f * r, 0.05f * h, 0.18f * r, trim); // crossguard
+    // shield on left (glows while W active)
+    Color sh = shieldTimer > 0.f ? Color{120, 220, 255, 255} : shade(col, 0.85f);
+    box({-0.95f * r, 0.6f * h, 0.05f * r}, 0.12f * r, 0.42f * h, 0.5f * r, sh);
+    endModel();
 }
 
 void Hero::Render2D() {
@@ -206,9 +272,14 @@ void Creep::Spawn() {
 void Creep::Update(float dt) {
     combatTick(dt);
     // move along the lane unless an enemy is close enough to fight
-    if (g_game->NearestEnemy(team, pos, attackRange + 2.f)) return;
+    if (CombatEntity* e = g_game->NearestEnemy(team, pos, attackRange + 2.f)) {
+        yaw = atan2f(e->pos.x - pos.x, e->pos.z - pos.z) * RAD2DEG;
+        return;
+    }
     Vector3 wp = g_game->LaneWp(laneIndex);
+    Vector3 o = pos;
     pos = eng::MoveToward(pos, wp, moveSpeed * dt);
+    updateYaw(*this, o);
     if (eng::Dist(pos, wp) < 1.6f) {
         laneIndex += (team == Team::Radiant) ? 1 : -1;
         laneIndex = (int)eng::Clampf((float)laneIndex, 0.f, (float)g_game->LaneCount() - 1);
@@ -217,8 +288,22 @@ void Creep::Update(float dt) {
 
 void Creep::Render() {
     Color col = TeamColor(team);
-    DrawCylinder(pos, radius, radius, height, 10, col);
-    DrawCylinderWires(pos, radius, radius, height, 10, Color{20, 20, 20, 120});
+    const float r = radius, h = height;
+    Color leg = shade(col, 0.5f);
+    beginModel(pos, yaw);
+    // little legs
+    for (float sx : {-0.5f, 0.5f})
+        for (float sz : {-0.5f, 0.5f})
+            box({sx * r, 0.12f * h, sz * r}, 0.22f * r, 0.24f * h, 0.22f * r, leg);
+    // body
+    box({0, 0.5f * h, 0}, 1.15f * r, 0.5f * h, 1.35f * r, col);
+    boxEdge({0, 0.5f * h, 0}, 1.15f * r, 0.5f * h, 1.35f * r, shade(col, 0.6f));
+    // head poking forward
+    box({0, 0.62f * h, 0.85f * r}, 0.8f * r, 0.42f * h, 0.5f * r, shade(col, 1.1f));
+    // eyes
+    DrawSphere({-0.22f * r, 0.72f * h, 1.05f * r}, 0.09f * r, Color{20, 20, 20, 255});
+    DrawSphere({0.22f * r, 0.72f * h, 1.05f * r}, 0.09f * r, Color{20, 20, 20, 255});
+    endModel();
 }
 
 // =================================================================
@@ -236,9 +321,25 @@ void Tower::Update(float dt) {
 
 void Tower::Render() {
     Color col = TeamColor(team);
-    DrawCube(Vector3{pos.x, height * 0.5f, pos.z}, radius * 1.8f, height, radius * 1.8f, col);
-    DrawCubeWires(Vector3{pos.x, height * 0.5f, pos.z}, radius * 1.8f, height, radius * 1.8f, Color{20, 20, 20, 255});
-    DrawCube(Vector3{pos.x, height + 0.5f, pos.z}, radius * 2.2f, 1.f, radius * 2.2f, col);
+    const float r = radius, h = height;
+    Color stone = mix(Color{120, 120, 130, 255}, col, 0.35f);
+    Color dark = shade(stone, 0.7f);
+    beginModel(pos, 0.f);
+    // base + shaft (tapered stack)
+    box({0, 0.12f * h, 0}, 2.0f * r, 0.24f * h, 2.0f * r, dark);
+    box({0, 0.5f * h, 0}, 1.5f * r, 0.6f * h, 1.5f * r, stone);
+    boxEdge({0, 0.5f * h, 0}, 1.5f * r, 0.6f * h, 1.5f * r, shade(stone, 0.6f));
+    // crown platform
+    box({0, 0.86f * h, 0}, 1.9f * r, 0.1f * h, 1.9f * r, dark);
+    // crenellations
+    for (float sx : {-0.7f, 0.7f})
+        for (float sz : {-0.7f, 0.7f})
+            box({sx * r, 0.95f * h, sz * r}, 0.34f * r, 0.14f * h, 0.34f * r, stone);
+    // glowing crystal on top (bright team color, bobs)
+    float bob = 0.06f * h * sinf((float)GetTime() * 2.f);
+    Color glow = mix(col, RAYWHITE, 0.35f);
+    DrawSphereEx({0, 1.05f * h + bob, 0}, 0.42f * r, 6, 6, glow);
+    endModel();
 }
 
 // =================================================================
@@ -259,11 +360,37 @@ void Ancient::onDeath(Team killer) {
 }
 
 void Ancient::Render() {
-    Color col = hp <= 0.f ? Color{70, 70, 70, 255} : TeamColor(team);
-    DrawCube(Vector3{pos.x, height * 0.5f, pos.z}, radius * 2, height, radius * 2, col);
-    DrawCubeWires(Vector3{pos.x, height * 0.5f, pos.z}, radius * 2, height, radius * 2, RAYWHITE);
-    DrawSphere(Vector3{pos.x, height + 1.2f, pos.z}, 1.4f,
-               hp > 0.f ? Color{255, 240, 150, 255} : DARKGRAY);
+    bool dead = hp <= 0.f;
+    Color col = dead ? Color{70, 70, 70, 255} : TeamColor(team);
+    const float r = radius, h = height;
+    Color stone = mix(Color{110, 110, 120, 255}, col, 0.4f);
+
+    // glow ring on the ground
+    Vector3 ring = pos; ring.y = 0.1f;
+    DrawCircle3D(ring, r + 1.5f, Vector3{1, 0, 0}, 90.f, shade(col, 0.8f));
+
+    beginModel(pos, 0.f);
+    // stepped pyramid
+    box({0, 0.10f * h, 0}, 2.0f * r, 0.20f * h, 2.0f * r, shade(stone, 0.75f));
+    box({0, 0.30f * h, 0}, 1.5f * r, 0.20f * h, 1.5f * r, stone);
+    box({0, 0.48f * h, 0}, 1.05f * r, 0.18f * h, 1.05f * r, shade(stone, 1.1f));
+    // four pillars
+    for (float sx : {-0.65f, 0.65f})
+        for (float sz : {-0.65f, 0.65f})
+            box({sx * r, 0.62f * h, sz * r}, 0.2f * r, 0.34f * h, 0.2f * r, shade(stone, 0.85f));
+    endModel();
+
+    // floating rotating crystal core
+    float t = (float)GetTime();
+    float bob = 0.5f + 0.25f * sinf(t * 1.5f);
+    Vector3 core{pos.x, h * 0.9f + bob, pos.z};
+    rlPushMatrix();
+    rlTranslatef(core.x, core.y, core.z);
+    rlRotatef(t * 40.f, 0, 1, 0);
+    Color glow = dead ? DARKGRAY : mix(col, RAYWHITE, 0.5f);
+    DrawSphereEx({0, 0, 0}, 1.3f, 2, 4, glow);          // faceted "diamond"
+    DrawSphereWires({0, 0, 0}, 1.35f, 2, 4, shade(glow, 0.7f));
+    rlPopMatrix();
 }
 
 // =================================================================
@@ -433,12 +560,31 @@ void MobaGame::applyDefsToLiveUnits() {
     });
 }
 
+MobaGame::~MobaGame() {
+    if (groundReady_) UnloadModel(groundModel_); // also frees the diffuse texture
+}
+
+void MobaGame::makeGround() {
+    // procedural tiled grass: checker base + faint perlin noise overlay
+    Image img = GenImageChecked(512, 512, 48, 48, Color{33, 41, 33, 255}, Color{28, 35, 28, 255});
+    Image noise = GenImagePerlinNoise(512, 512, 0, 0, 5.0f);
+    ImageDraw(&img, noise, {0, 0, 512, 512}, {0, 0, 512, 512}, Color{72, 98, 72, 45});
+    UnloadImage(noise);
+    groundTex_ = LoadTextureFromImage(img);
+    SetTextureFilter(groundTex_, TEXTURE_FILTER_BILINEAR);
+    UnloadImage(img);
+    groundModel_ = LoadModelFromMesh(GenMeshPlane(160, 100, 1, 1));
+    groundModel_.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = groundTex_;
+    groundReady_ = true;
+}
+
 void MobaGame::OnInit(eng::Engine& e) {
     engine_ = &e; g_game = this;
     e.background = Color{18, 20, 22, 255};
+    makeGround();
     loadDefs();
     reset();
-    if (std::getenv("MOBA_SHOT_AT")) editorOpen_ = true; // show editor in preview capture
+    if (std::getenv("MOBA_SHOT_EDITOR")) editorOpen_ = true; // show editor in preview capture
 }
 
 void MobaGame::OnInput(eng::Engine& e) {
@@ -463,7 +609,7 @@ void MobaGame::OnInput(eng::Engine& e) {
 void MobaGame::OnFrame(eng::Engine& e, float /*dt*/) {
     Vector3 focus = (player_ && player_->alive()) ? player_->pos
                     : (player_ ? player_->spawnPos : Vector3{70, 0, 40});
-    if (std::getenv("MOBA_SHOT_AT")) focus = LaneWp(3);
+    if (std::getenv("MOBA_SHOT_AT") && !std::getenv("MOBA_SHOT_HERO")) focus = LaneWp(3);
     float d = cl_cam_dist.GetFloat();
     Camera3D& c = e.camera();
     c.target = Vector3Lerp(c.target, focus, 0.15f);
@@ -477,15 +623,18 @@ void MobaGame::OnTick(eng::World& w) {
 }
 
 void MobaGame::OnRender3D() {
-    DrawPlane(Vector3{70, 0, 40}, Vector2{160, 100}, Color{30, 34, 30, 255});
+    if (groundReady_) DrawModel(groundModel_, Vector3{70, 0, 40}, 1.0f, WHITE);
+    else DrawPlane(Vector3{70, 0, 40}, Vector2{160, 100}, Color{30, 34, 30, 255});
     if (!lane_.empty()) {
         DrawCircle3D(lane_.front(), 22.f, Vector3{1, 0, 0}, 90.f, Color{60, 110, 70, 255});
         DrawCircle3D(lane_.back(), 22.f, Vector3{1, 0, 0}, 90.f, Color{120, 70, 70, 255});
+        // dirt path: overlapping tiles along the lane
+        Color dirt{74, 64, 50, 255};
         for (int i = 0; i + 1 < (int)lane_.size(); ++i) {
-            Vector3 a = lane_[i], b = lane_[i + 1]; a.y = b.y = 0.05f;
-            DrawCylinderEx(a, b, 3.2f, 3.2f, 12, Color{70, 68, 56, 255});
+            Vector3 a = lane_[i], b = lane_[i + 1]; a.y = b.y = 0.06f;
+            DrawCylinderEx(a, b, 3.4f, 3.4f, 14, dirt);
         }
-        for (auto wp : lane_) { wp.y = 0.05f; DrawCylinder(wp, 3.2f, 3.2f, 0.1f, 16, Color{70, 68, 56, 255}); }
+        for (auto wp : lane_) { wp.y = 0.06f; DrawCylinder(wp, 3.4f, 3.4f, 0.05f, 18, dirt); }
     }
 }
 

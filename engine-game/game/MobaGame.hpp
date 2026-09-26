@@ -18,6 +18,7 @@ enum class Phase { Playing, RadiantWin, DireWin };
 
 class MobaGame : public eng::IGame {
 public:
+    ~MobaGame() override;
     const char* Title() const override { return "Mini MOBA — engine build"; }
 
     void OnInit(eng::Engine& e) override;
@@ -56,6 +57,7 @@ private:
     void loadDefs();
     void applyDefsToLiveUnits();
     void drawEditor();
+    void makeGround();   // build the procedural ground texture + plane model
 
     eng::Engine* engine_ = nullptr;
     std::vector<Vector3> lane_;
@@ -72,6 +74,10 @@ private:
     bool editorOpen_ = false;
     int editSel_ = 0;         // 0=hero 1=creep 2=tower 3=ancient
     std::string editorMsg_;   // last save/reload status line
+
+    Texture2D groundTex_{};
+    Model groundModel_{};
+    bool groundReady_ = false;
 };
 
 extern MobaGame* g_game;

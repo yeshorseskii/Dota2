@@ -18,6 +18,7 @@ public:
     float attackDamage = 10.f, attackRange = 6.f, attackInterval = 1.f, attackTimer = 0.f;
     float moveSpeed = 0.f;   // units/sec (0 for buildings)
     float height = 2.f;
+    float yaw = 0.f;         // facing angle (degrees), updated when moving
     float respawnTimer = 0.f;
     float barWidth = 28.f;   // screen-space HP bar width
 
