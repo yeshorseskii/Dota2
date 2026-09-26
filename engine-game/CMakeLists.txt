@@ -31,6 +31,8 @@ target_link_libraries(engine PUBLIC raylib)
 add_executable(mini_moba_engine
   src/main.cpp
   game/Game.cpp
+  game/Defs.cpp
+  third_party/raygui_impl.cpp
 )
 target_link_libraries(mini_moba_engine PRIVATE engine raylib)
 
@@ -41,3 +43,9 @@ if(APPLE)
   target_link_libraries(engine PUBLIC
     "-framework IOKit" "-framework Cocoa" "-framework OpenGL")
 endif()
+
+# Copy the character data next to the binary so it loads (and Save writes) there.
+add_custom_command(TARGET mini_moba_engine POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/data/characters.txt"
+    "$<TARGET_FILE_DIR:mini_moba_engine>/characters.txt")

@@ -3,6 +3,7 @@
 #include "MobaGame.hpp"
 #include "Entities.hpp"
 #include "engine/ConVar.hpp"
+#include "third_party/raygui.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -10,6 +11,18 @@
 namespace game {
 
 MobaGame* g_game = nullptr;
+
+// Copy tunable stats from a UnitDef onto a live combat entity.
+static void applyDef(CombatEntity& u, const UnitDef& d) {
+    u.maxHp = d.hp;
+    if (u.hp > u.maxHp) u.hp = u.maxHp;
+    u.attackDamage = d.damage;
+    u.attackRange = d.range;
+    u.attackInterval = d.attackInterval;
+    u.moveSpeed = d.moveSpeed;
+    u.radius = d.radius;
+    u.height = d.height;
+}
 
 // ------------------------------------------------------------- cvars --------
 static eng::ConVar sv_wave_interval("sv_wave_interval", 22.f, "seconds between creep waves");
@@ -19,6 +32,7 @@ static eng::ConVar cl_cam_dist("cl_cam_dist", 54.f, "camera follow distance");
 
 // ------------------------------------------------------------- colors -------
 Color TeamColor(Team t) {
+    if (g_game) return g_game->defs().teamColor(t == Team::Radiant);
     return t == Team::Radiant ? Color{86, 196, 112, 255} : Color{214, 84, 84, 255};
 }
 
@@ -72,16 +86,18 @@ void CombatEntity::drawHpBar() {
 // Hero
 // =================================================================
 void Hero::Spawn() {
-    classname = "hero"; solid = true; height = 3.2f; radius = 1.6f; barWidth = 52.f;
-    maxHp = hp = 480.f; attackDamage = 34.f; attackRange = 11.f; attackInterval = 0.9f;
+    classname = "hero"; solid = true; barWidth = 52.f;
+    applyDef(*this, g_game->defs().hero);
+    hp = maxHp;
     spawnPos = pos; moveOrder = pos;
 }
 
 void Hero::addXp(float amount) {
+    const UnitDef& d = g_game->defs().hero;
     xp += amount;
     while (xp >= xpToLevel) {
         xp -= xpToLevel; level += 1; xpToLevel *= 1.35f;
-        maxHp += 55.f; attackDamage += 6.f; hp = std::min(maxHp, hp + 60.f);
+        maxHp += d.levelHp; attackDamage += d.levelDmg; hp = std::min(maxHp, hp + 60.f);
         g_game->SpawnText(Vector3Add(pos, {0, height + 1.f, 0}), "LEVEL UP!",
                           Color{255, 215, 0, 255}, 1.3f);
     }
@@ -89,18 +105,20 @@ void Hero::addXp(float amount) {
 
 void Hero::castQ(Vector3 target) {
     if (qCd > 0.f) return;
+    const UnitDef& d = g_game->defs().hero;
     Vector3 dir = Vector3Normalize(Vector3Subtract(target, pos));
     if (Vector3Length(dir) < 0.1f) dir = {1, 0, 0};
     auto* p = g_game->World().Create<Projectile>();
     p->team = team; p->pos = pos; p->pos.y = 1.5f;
-    p->vel = Vector3Scale(dir, 70.f); p->damage = 60.f; p->splashRadius = 6.f;
+    p->vel = Vector3Scale(dir, 70.f); p->damage = d.qDamage; p->splashRadius = d.qSplash;
     p->color = team == Team::Radiant ? Color{120, 200, 255, 255} : Color{255, 150, 120, 255};
-    qCd = 3.f;
+    qCd = d.qCooldown;
 }
 
 void Hero::castW() {
     if (wCd > 0.f) return;
-    hp = std::min(maxHp, hp + 80.f); shieldTimer = 3.f; wCd = 9.f;
+    const UnitDef& d = g_game->defs().hero;
+    hp = std::min(maxHp, hp + d.wHeal); shieldTimer = d.wShield; wCd = d.wCooldown;
     g_game->SpawnText(Vector3Add(pos, {0, height, 0}), "+shield", Color{120, 255, 160, 255}, 1.f);
 }
 
@@ -122,7 +140,7 @@ void Hero::Update(float dt) {
 
     if (isPlayer) {
         if (hasMoveOrder) {
-            pos = eng::MoveToward(pos, moveOrder, 20.f * dt);
+            pos = eng::MoveToward(pos, moveOrder, moveSpeed * dt);
             if (eng::Dist(pos, moveOrder) < 0.6f) hasMoveOrder = false;
         }
         return;
@@ -130,7 +148,7 @@ void Hero::Update(float dt) {
 
     // enemy AI: retreat when low, else push and fight along the lane.
     if (hp < maxHp * 0.30f) {
-        pos = eng::MoveToward(pos, spawnPos, 20.f * dt);
+        pos = eng::MoveToward(pos, spawnPos, moveSpeed * dt);
         castW();
         return;
     }
@@ -138,9 +156,9 @@ void Hero::Update(float dt) {
     if (aggro) {
         if (qCd <= 0.f && eng::Dist(pos, aggro->pos) < 36.f) castQ(aggro->pos);
         if (eng::Dist(pos, aggro->pos) > attackRange * 0.9f)
-            pos = eng::MoveToward(pos, aggro->pos, 20.f * dt);
+            pos = eng::MoveToward(pos, aggro->pos, moveSpeed * dt);
     } else {
-        pos = eng::MoveToward(pos, g_game->LaneWp(g_game->LaneCount() - 3), 20.f * dt);
+        pos = eng::MoveToward(pos, g_game->LaneWp(g_game->LaneCount() - 3), moveSpeed * dt);
     }
 }
 
@@ -180,8 +198,9 @@ void Hero::Render2D() {
 // Creep
 // =================================================================
 void Creep::Spawn() {
-    classname = "creep"; solid = true; radius = 1.1f; height = 2.2f; barWidth = 28.f;
-    maxHp = hp = 120.f; attackDamage = 12.f; attackRange = 6.f; attackInterval = 1.f;
+    classname = "creep"; solid = true; barWidth = 28.f;
+    applyDef(*this, g_game->defs().creep);
+    hp = maxHp;
 }
 
 void Creep::Update(float dt) {
@@ -189,7 +208,7 @@ void Creep::Update(float dt) {
     // move along the lane unless an enemy is close enough to fight
     if (g_game->NearestEnemy(team, pos, attackRange + 2.f)) return;
     Vector3 wp = g_game->LaneWp(laneIndex);
-    pos = eng::MoveToward(pos, wp, 9.f * dt);
+    pos = eng::MoveToward(pos, wp, moveSpeed * dt);
     if (eng::Dist(pos, wp) < 1.6f) {
         laneIndex += (team == Team::Radiant) ? 1 : -1;
         laneIndex = (int)eng::Clampf((float)laneIndex, 0.f, (float)g_game->LaneCount() - 1);
@@ -205,10 +224,13 @@ void Creep::Render() {
 // =================================================================
 // Tower
 // =================================================================
+void Tower::Spawn() {
+    classname = "tower"; solid = true; barWidth = 56.f;
+    applyDef(*this, g_game->defs().tower);
+    hp = maxHp;
+}
+
 void Tower::Update(float dt) {
-    if (radius < 2.f) { radius = 2.6f; height = 8.f; barWidth = 56.f;
-                        maxHp = hp = 900.f; attackDamage = 60.f; attackRange = 20.f;
-                        attackInterval = 1.1f; }
     combatTick(dt);
 }
 
@@ -222,10 +244,13 @@ void Tower::Render() {
 // =================================================================
 // Ancient
 // =================================================================
+void Ancient::Spawn() {
+    classname = "ancient"; solid = true; barWidth = 90.f;
+    applyDef(*this, g_game->defs().ancient);
+    hp = maxHp;
+}
+
 void Ancient::Update(float dt) {
-    if (radius < 3.f) { radius = 4.5f; height = 10.f; barWidth = 90.f;
-                        maxHp = hp = 2600.f; attackDamage = 45.f; attackRange = 18.f;
-                        attackInterval = 1.2f; }
     combatTick(dt);
 }
 
@@ -390,13 +415,35 @@ void MobaGame::reset() {
     spawnMap();
 }
 
+void MobaGame::loadDefs() {
+    const char* cands[] = {"characters.txt", "data/characters.txt",
+                           "../data/characters.txt", "engine-game/data/characters.txt"};
+    for (const char* p : cands) {
+        if (defs_.Load(p)) { defsPath_ = p; return; }
+    }
+    defsPath_ = "characters.txt"; // none found: keep defaults, Save creates it here
+}
+
+void MobaGame::applyDefsToLiveUnits() {
+    World().ForEach([&](eng::Entity& e) {
+        if (auto* h = dynamic_cast<Hero*>(&e))         applyDef(*h, defs_.hero);
+        else if (auto* c = dynamic_cast<Creep*>(&e))   applyDef(*c, defs_.creep);
+        else if (auto* t = dynamic_cast<Tower*>(&e))   applyDef(*t, defs_.tower);
+        else if (auto* a = dynamic_cast<Ancient*>(&e)) applyDef(*a, defs_.ancient);
+    });
+}
+
 void MobaGame::OnInit(eng::Engine& e) {
     engine_ = &e; g_game = this;
     e.background = Color{18, 20, 22, 255};
+    loadDefs();
     reset();
+    if (std::getenv("MOBA_SHOT_AT")) editorOpen_ = true; // show editor in preview capture
 }
 
 void MobaGame::OnInput(eng::Engine& e) {
+    if (IsKeyPressed(KEY_TAB)) editorOpen_ = !editorOpen_;
+
     float wheel = GetMouseWheelMove();
     if (wheel != 0.f)
         cl_cam_dist.SetFloat(eng::Clampf(cl_cam_dist.GetFloat() - wheel * 3.f, 20.f, 80.f));
@@ -404,7 +451,9 @@ void MobaGame::OnInput(eng::Engine& e) {
     if (phase_ != Phase::Playing) { if (IsKeyPressed(KEY_R)) reset(); return; }
     if (!player_ || !player_->alive()) return;
 
-    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+    // Don't issue move/ability orders when clicking inside the editor panel.
+    bool overPanel = editorOpen_ && GetMousePosition().x < 322.f;
+    if (!overPanel && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
         player_->moveOrder = e.GroundPoint(); player_->hasMoveOrder = true;
     }
     if (IsKeyPressed(KEY_Q)) player_->castQ(e.GroundPoint());
@@ -461,7 +510,8 @@ void MobaGame::OnRenderHUD() {
         cd("Q bolt", player_->qCd, 16);
         cd("W shield", player_->wCd, 170);
     }
-    DrawText("Right-click move | Q/W abilities | wheel zoom | ~ console", W - 470, H - 28, 16, GRAY);
+    DrawText("Right-click move | Q/W | wheel zoom | ~ console | Tab editor",
+             W - 520, H - 28, 16, GRAY);
 
     if (phase_ != Phase::Playing) {
         DrawRectangle(0, 0, W, H, Color{0, 0, 0, 150});
@@ -471,6 +521,57 @@ void MobaGame::OnRenderHUD() {
         const char* sub = "Press R to play again, Esc to quit";
         DrawText(sub, W / 2 - MeasureText(sub, 22) / 2, H / 2 + 20, 22, RAYWHITE);
     }
+
+    if (editorOpen_) drawEditor();
+}
+
+// -------------------------------------------------------- character editor --
+// A raygui panel to tune each unit type's stats + the team colors live, then
+// Apply to existing units / Save to characters.txt / Reload from it.
+void MobaGame::drawEditor() {
+    const float x = 10, y = 82, w = 302;
+    const float h = GetScreenHeight() - y - 10;
+    GuiPanel({x, y, w, h}, "CHARACTER EDITOR");
+
+    float cx = x + 12, cw = w - 24, cy = y + 34;
+    GuiToggleGroup({cx, cy, (cw - 18) / 4.f, 24}, "Hero;Creep;Tower;Ancient", &editSel_);
+    cy += 34;
+
+    UnitDef& d = defs_.byIndex(editSel_);
+    auto S = [&](const char* label, float* v, float mn, float mx) {
+        GuiSlider({cx + 74, cy, cw - 74, 18}, label, TextFormat("%.2f", *v), v, mn, mx);
+        cy += 24;
+    };
+    S("HP", &d.hp, 0, 3000);
+    S("Damage", &d.damage, 0, 200);
+    S("Range", &d.range, 0, 40);
+    S("Atk int", &d.attackInterval, 0.2f, 3);
+    S("Move spd", &d.moveSpeed, 0, 40);
+    S("Radius", &d.radius, 0.5f, 6);
+    S("Height", &d.height, 1, 16);
+    if (editSel_ == 0) {
+        S("Q dmg", &d.qDamage, 0, 300);
+        S("Q cd", &d.qCooldown, 0, 15);
+        S("W heal", &d.wHeal, 0, 400);
+        S("W cd", &d.wCooldown, 0, 30);
+    }
+
+    cy += 6;
+    GuiLabel({cx, cy, cw, 18}, "Team colors (Radiant / Dire)");
+    cy += 20;
+    GuiColorPicker({cx, cy, 96, 84}, NULL, &defs_.radiant);
+    GuiColorPicker({cx + cw - 118, cy, 96, 84}, NULL, &defs_.dire);
+    cy += 96;
+
+    float bw = (cw - 12) / 3.f;
+    if (GuiButton({cx, cy, bw, 26}, "Apply")) { applyDefsToLiveUnits(); editorMsg_ = "applied to live units"; }
+    if (GuiButton({cx + bw + 6, cy, bw, 26}, "Save"))
+        editorMsg_ = defs_.Save(defsPath_) ? ("saved: " + defsPath_) : "save FAILED";
+    if (GuiButton({cx + 2 * (bw + 6), cy, bw, 26}, "Reload")) {
+        defs_.Load(defsPath_); applyDefsToLiveUnits(); editorMsg_ = "reloaded";
+    }
+    cy += 30;
+    if (!editorMsg_.empty()) GuiLabel({cx, cy, cw, 18}, editorMsg_.c_str());
 }
 
 } // namespace game

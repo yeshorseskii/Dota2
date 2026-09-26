@@ -5,7 +5,9 @@
 #include "engine/IGame.hpp"
 #include "engine/Engine.hpp"
 #include "Combat.hpp"
+#include "Defs.hpp"
 #include <vector>
+#include <string>
 
 namespace game {
 
@@ -40,6 +42,9 @@ public:
     Hero* Player() { return player_; }
     void SetWin(Phase p) { if (phase_ == Phase::Playing) phase_ = p; }
 
+    // Character data (read by entities on spawn, edited by the in-game editor).
+    Defs& defs() { return defs_; }
+
     // Console-facing controls.
     void Restart() { reset(); }
     void ForceWin(Team t) { phase_ = (t == Team::Radiant) ? Phase::RadiantWin : Phase::DireWin; }
@@ -48,6 +53,9 @@ private:
     void reset();
     void spawnMap();
     void spawnWave();
+    void loadDefs();
+    void applyDefsToLiveUnits();
+    void drawEditor();
 
     eng::Engine* engine_ = nullptr;
     std::vector<Vector3> lane_;
@@ -58,6 +66,12 @@ private:
     Phase phase_ = Phase::Playing;
     float waveTimer_ = 0.f;
     int waveCount_ = 0;
+
+    Defs defs_;
+    std::string defsPath_;    // resolved characters.txt path (for Save)
+    bool editorOpen_ = false;
+    int editSel_ = 0;         // 0=hero 1=creep 2=tower 3=ancient
+    std::string editorMsg_;   // last save/reload status line
 };
 
 extern MobaGame* g_game;

@@ -41,7 +41,7 @@ public:
 
 class Tower : public CombatEntity {
 public:
-    void Spawn() override { classname = "tower"; solid = true; }
+    void Spawn() override;
     void Update(float dt) override;
     void Render() override;
     void Render2D() override { drawHpBar(); }
@@ -49,7 +49,7 @@ public:
 
 class Ancient : public CombatEntity {
 public:
-    void Spawn() override { classname = "ancient"; solid = true; }
+    void Spawn() override;
     void Update(float dt) override;
     void Render() override;
     void Render2D() override { drawHpBar(); }

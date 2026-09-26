@@ -1,0 +1,55 @@
+# Mini MOBA character definitions.
+# Edit values here, or tune them live in the in-game editor (press Tab) and Save.
+# Colors are R,G,B (0-255).
+
+[hero]
+name = Hero
+hp = 480
+damage = 34
+range = 11
+attack_interval = 0.9
+move_speed = 20
+radius = 1.6
+height = 3.2
+q_damage = 60
+q_cooldown = 3
+q_splash = 6
+w_heal = 80
+w_shield = 3
+w_cooldown = 9
+level_hp = 55
+level_damage = 6
+
+[creep]
+name = Creep
+hp = 120
+damage = 12
+range = 6
+attack_interval = 1.0
+move_speed = 9
+radius = 1.1
+height = 2.2
+
+[tower]
+name = Tower
+hp = 900
+damage = 60
+range = 20
+attack_interval = 1.1
+move_speed = 0
+radius = 2.6
+height = 8.0
+
+[ancient]
+name = Ancient
+hp = 2600
+damage = 45
+range = 18
+attack_interval = 1.2
+move_speed = 0
+radius = 4.5
+height = 10.0
+
+[colors]
+radiant = 86,196,112
+dire = 214,84,84
