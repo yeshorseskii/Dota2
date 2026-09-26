@@ -1,1 +1,4 @@
-engine-game/*.png
+# Screenshots dropped here by the game's capture hook (dev only).
+*.png
+build/
+build-asan/
