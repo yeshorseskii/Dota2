@@ -1,0 +1,15 @@
+# C++ build output
+build/
+*/build/
+*.o
+*.obj
+*.a
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
