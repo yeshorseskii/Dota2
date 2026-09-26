@@ -37,6 +37,11 @@ public:
     void OnKill(CombatEntity& victim, Team killer);
     void SpawnBeam(Vector3 a, Vector3 b, Color c);
     void SpawnText(Vector3 at, const std::string& s, Color c, float life = 0.8f);
+    void SpawnParticles(Vector3 at, Color c, int count, float speed, float life = 0.6f, float grav = 0.f);
+    void SpawnRing(Vector3 at, float r0, float r1, Color c, float life);
+    // AoE damage + optional crowd control on all enemies of `from` in radius.
+    void AreaEffect(Team from, Vector3 center, float radius, float dmg,
+                    float slowDur, float slowMul, float stunDur);
 
     Vector3 LaneWp(int lane, int step) const;
     int LaneCount(int lane) const;

@@ -75,8 +75,27 @@ Color TeamColor(Team t) {
 // =================================================================
 // CombatEntity
 // =================================================================
+void CombatEntity::applyStatus(float dt) {
+    if (slowTimer > 0.f) slowTimer -= dt;
+    if (stunTimer > 0.f) stunTimer -= dt;
+    if (dotTimer > 0.f) {
+        dotTimer -= dt;
+        dotAccum += dt;
+        if (dotAccum >= 0.5f) { takeDamage(dotTps * 0.5f, dotFrom); dotAccum -= 0.5f; }
+    }
+}
+void CombatEntity::slow(float dur, float mul) {
+    if (dur >= slowTimer) { slowTimer = dur; slowMul = mul; }
+}
+void CombatEntity::stun(float dur) { if (dur > stunTimer) stunTimer = dur; }
+void CombatEntity::dot(float dur, float tps, Team from) {
+    dotTimer = dur; dotTps = tps; dotFrom = from; dotAccum = 0.f;
+}
+
 void CombatEntity::combatTick(float dt) {
+    applyStatus(dt);
     if (attackTimer > 0.f) attackTimer -= dt;
+    if (stunTimer > 0.f) return;   // can't attack while stunned
     tryAutoAttack();
 }
 
@@ -124,7 +143,7 @@ void CombatEntity::drawHpBar() {
 void Hero::Spawn() {
     classname = "hero"; solid = true; barWidth = 52.f;
     applyDef(*this, g_game->defs().hero);
-    hp = maxHp;
+    hp = maxHp; mana = maxMana;
     spawnPos = pos; moveOrder = pos;
 }
 
@@ -139,23 +158,55 @@ void Hero::addXp(float amount) {
     }
 }
 
-void Hero::castQ(Vector3 target) {
-    if (qCd > 0.f) return;
-    const UnitDef& d = g_game->defs().hero;
-    Vector3 dir = Vector3Normalize(Vector3Subtract(target, pos));
-    if (Vector3Length(dir) < 0.1f) dir = {1, 0, 0};
-    auto* p = g_game->World().Create<Projectile>();
-    p->team = team; p->pos = pos; p->pos.y = 1.5f;
-    p->vel = Vector3Scale(dir, 70.f); p->damage = d.qDamage; p->splashRadius = d.qSplash;
-    p->color = team == Team::Radiant ? Color{120, 200, 255, 255} : Color{255, 150, 120, 255};
-    qCd = d.qCooldown;
-}
+// Ability kit (original): 0 Arcane Bolt, 1 Aegis, 2 Blink Step, 3 Cataclysm (ult).
+static const float kAbilityCost[4] = {40.f, 60.f, 50.f, 150.f};
 
-void Hero::castW() {
-    if (wCd > 0.f) return;
+void Hero::cast(int i, Vector3 target) {
+    if (i < 0 || i > 3 || cd[i] > 0.f || stunned() || mana < kAbilityCost[i]) return;
     const UnitDef& d = g_game->defs().hero;
-    hp = std::min(maxHp, hp + d.wHeal); shieldTimer = d.wShield; wCd = d.wCooldown;
-    g_game->SpawnText(Vector3Add(pos, {0, height, 0}), "+shield", Color{120, 255, 160, 255}, 1.f);
+    Color team1 = team == Team::Radiant ? Color{120, 200, 255, 255} : Color{255, 150, 120, 255};
+    switch (i) {
+        case 0: {  // Arcane Bolt — projectile nuke
+            Vector3 dir = Vector3Normalize(Vector3Subtract(target, pos));
+            if (Vector3Length(dir) < 0.1f) dir = {1, 0, 0};
+            auto* p = g_game->World().Create<Projectile>();
+            p->team = team; p->pos = pos; p->pos.y = 1.6f;
+            p->vel = Vector3Scale(dir, 72.f);
+            p->damage = d.qDamage; p->splashRadius = d.qSplash; p->color = team1;
+            cd[i] = d.qCooldown;
+            g_game->SpawnParticles({pos.x, 1.6f, pos.z}, team1, 8, 6.f, 0.4f);
+            break;
+        }
+        case 1: {  // Aegis — heal + damage shield
+            hp = std::min(maxHp, hp + d.wHeal); shieldTimer = d.wShield; cd[i] = d.wCooldown;
+            g_game->SpawnText(Vector3Add(pos, {0, height, 0}), "+shield", Color{120, 255, 160, 255}, 1.f);
+            g_game->SpawnParticles({pos.x, 1.f, pos.z}, Color{140, 255, 180, 255}, 14, 5.f, 0.7f);
+            g_game->SpawnRing(pos, 1.f, radius + 3.f, Color{140, 255, 180, 255}, 0.5f);
+            break;
+        }
+        case 2: {  // Blink Step — dash toward the cursor
+            Vector3 from = pos;
+            Vector3 dir = Vector3Subtract(target, pos);
+            float dd = Vector3Length(dir), maxr = 32.f;
+            if (dd > maxr) dir = Vector3Scale(Vector3Normalize(dir), maxr);
+            Vector3 np = Vector3Add(pos, dir);
+            np.x = eng::Clampf(np.x, 4.f, 176.f); np.z = eng::Clampf(np.z, 4.f, 176.f); np.y = 0.f;
+            pos = np; hasMoveOrder = false; cd[i] = 6.f;
+            g_game->SpawnParticles(from, Color{185, 150, 255, 255}, 16, 7.f, 0.5f);
+            g_game->SpawnParticles(pos, Color{185, 150, 255, 255}, 16, 7.f, 0.5f);
+            g_game->SpawnRing(from, 1.f, 5.f, Color{185, 150, 255, 255}, 0.4f);
+            break;
+        }
+        case 3: {  // Cataclysm — ultimate AoE: heavy damage + slow + brief stun
+            float rad = 14.f;
+            g_game->AreaEffect(team, target, rad, 180.f + level * 10.f, 2.5f, 0.5f, 0.6f);
+            g_game->SpawnRing(target, 1.f, rad, Color{255, 180, 90, 255}, 0.7f);
+            g_game->SpawnParticles({target.x, 1.f, target.z}, Color{255, 160, 80, 255}, 40, 10.f, 0.9f, 4.f);
+            cd[i] = 40.f;
+            break;
+        }
+    }
+    mana -= kAbilityCost[i];
 }
 
 void Hero::onDeath(Team /*killer*/) {
@@ -164,20 +215,24 @@ void Hero::onDeath(Team /*killer*/) {
 }
 
 void Hero::Update(float dt) {
-    if (qCd > 0.f) qCd -= dt;
-    if (wCd > 0.f) wCd -= dt;
+    for (float& c : cd) if (c > 0.f) c -= dt;
     if (shieldTimer > 0.f) shieldTimer -= dt;
+    mana = std::min(maxMana, mana + manaRegen * dt);
     if (respawnTimer > 0.f) {
         respawnTimer -= dt;
-        if (respawnTimer <= 0.f) { respawnTimer = 0.f; hp = maxHp; pos = spawnPos; hasMoveOrder = false; }
+        if (respawnTimer <= 0.f) {
+            respawnTimer = 0.f; hp = maxHp; mana = maxMana; pos = spawnPos; hasMoveOrder = false;
+        }
         return;
     }
+    if (hp > 0.f) hp = std::min(maxHp, hp + hpRegen * dt);
     combatTick(dt);
+    if (stunned()) return;   // can't act while stunned
 
     Vector3 o = pos;
     if (isPlayer) {
         if (hasMoveOrder) {
-            pos = eng::MoveToward(pos, moveOrder, moveSpeed * dt);
+            pos = eng::MoveToward(pos, moveOrder, effSpeed() * dt);
             updateYaw(*this, o);
             if (eng::Dist(pos, moveOrder) < 0.6f) hasMoveOrder = false;
         } else {
@@ -190,16 +245,18 @@ void Hero::Update(float dt) {
 
     // enemy AI: retreat when low, else push and fight along the lane.
     if (hp < maxHp * 0.30f) {
-        pos = eng::MoveToward(pos, spawnPos, moveSpeed * dt);
+        pos = eng::MoveToward(pos, spawnPos, effSpeed() * dt);
         updateYaw(*this, o);
-        castW();
+        cast(1, pos);  // Aegis
         return;
     }
     CombatEntity* aggro = g_game->NearestEnemy(team, pos, 34.f);
     if (aggro) {
-        if (qCd <= 0.f && eng::Dist(pos, aggro->pos) < 36.f) castQ(aggro->pos);
-        if (eng::Dist(pos, aggro->pos) > attackRange * 0.9f) {
-            pos = eng::MoveToward(pos, aggro->pos, moveSpeed * dt);
+        float da = eng::Dist(pos, aggro->pos);
+        if (da < 36.f) cast(0, aggro->pos);                 // Arcane Bolt
+        if (da < 16.f) cast(3, aggro->pos);                 // Cataclysm ult when close
+        if (da > attackRange * 0.9f) {
+            pos = eng::MoveToward(pos, aggro->pos, effSpeed() * dt);
             updateYaw(*this, o);
         } else {
             yaw = atan2f(aggro->pos.x - pos.x, aggro->pos.z - pos.z) * RAD2DEG;
@@ -208,7 +265,7 @@ void Hero::Update(float dt) {
         // push down the mid lane toward the enemy base
         int midLast = g_game->LaneCount(1) - 1;
         Vector3 tgt = g_game->LaneWp(1, team == Team::Dire ? 1 : midLast - 1);
-        pos = eng::MoveToward(pos, tgt, moveSpeed * dt);
+        pos = eng::MoveToward(pos, tgt, effSpeed() * dt);
         updateYaw(*this, o);
     }
 }
@@ -293,7 +350,7 @@ void Creep::Update(float dt) {
     }
     Vector3 wp = g_game->LaneWp(lane, laneIndex);
     Vector3 o = pos;
-    pos = eng::MoveToward(pos, wp, moveSpeed * dt);
+    pos = eng::MoveToward(pos, wp, effSpeed() * dt);
     updateYaw(*this, o);
     if (eng::Dist(pos, wp) < 2.0f) {
         laneIndex += (team == Team::Radiant) ? 1 : -1;
@@ -443,6 +500,27 @@ void Beam::Render() {
     DrawLine3D(a, b, Color{color.r, color.g, color.b, al});
 }
 
+void Particle::Update(float dt) {
+    life -= dt;
+    vel.y -= grav * dt;
+    pos = Vector3Add(pos, Vector3Scale(vel, dt));
+    if (life <= 0.f) Remove();
+}
+void Particle::Render() {
+    float f = eng::Clampf(life / maxLife, 0.f, 1.f);
+    DrawSphere(pos, size * f, Color{color.r, color.g, color.b, (unsigned char)(255 * f)});
+}
+
+void Ring::Update(float dt) { life -= dt; if (life <= 0.f) Remove(); }
+void Ring::Render() {
+    float t = 1.f - eng::Clampf(life / maxLife, 0.f, 1.f);
+    float rad = r0 + (r1 - r0) * t;
+    unsigned char al = (unsigned char)(200 * (1.f - t));
+    Vector3 c = {pos.x, 0.2f, pos.z};
+    DrawCircle3D(c, rad, {1, 0, 0}, 90.f, Color{color.r, color.g, color.b, al});
+    DrawCircle3D(c, rad * 0.7f, {1, 0, 0}, 90.f, Color{color.r, color.g, color.b, (unsigned char)(al / 2)});
+}
+
 void FloatText::Update(float dt) { life -= dt; pos.y += 3.f * dt; if (life <= 0.f) Remove(); }
 void FloatText::Render2D() {
     Vector2 sp = GetWorldToScreen(pos, g_game->Cam());
@@ -472,6 +550,38 @@ void MobaGame::SpawnBeam(Vector3 a, Vector3 b, Color c) {
 void MobaGame::SpawnText(Vector3 at, const std::string& s, Color c, float life) {
     auto* e = World().Create<FloatText>();
     e->pos = at; e->text = s; e->color = c; e->life = e->maxLife = life;
+}
+
+void MobaGame::SpawnParticles(Vector3 at, Color c, int count, float speed, float life, float grav) {
+    for (int i = 0; i < count; ++i) {
+        auto* p = World().Create<Particle>();
+        float a = (rand() % 1000) / 1000.f * 2.f * PI;
+        float el = (rand() % 1000) / 1000.f;             // 0..1 upward bias
+        float sp = speed * (0.5f + (rand() % 1000) / 1000.f);
+        p->pos = at;
+        p->vel = {cosf(a) * sp, el * sp * 1.2f + 2.f, sinf(a) * sp};
+        p->life = p->maxLife = life * (0.7f + (rand() % 1000) / 2000.f);
+        p->size = 0.25f + (rand() % 1000) / 3000.f;
+        p->grav = grav;
+        p->color = c;
+    }
+}
+
+void MobaGame::SpawnRing(Vector3 at, float r0, float r1, Color c, float life) {
+    auto* r = World().Create<Ring>();
+    r->pos = at; r->r0 = r0; r->r1 = r1; r->color = c; r->life = r->maxLife = life;
+}
+
+void MobaGame::AreaEffect(Team from, Vector3 center, float radius, float dmg,
+                          float slowDur, float slowMul, float stunDur) {
+    for (eng::Entity* e : World().FindInRadius(center, radius + 4.f)) {
+        auto* c = dynamic_cast<CombatEntity*>(e);
+        if (!c || !c->alive() || c->team == from) continue;
+        if (eng::Dist(center, c->pos) > radius + c->radius) continue;
+        if (dmg > 0.f) c->takeDamage(dmg, from);
+        if (slowDur > 0.f) c->slow(slowDur, slowMul);
+        if (stunDur > 0.f) c->stun(stunDur);
+    }
 }
 
 int MobaGame::LaneCount(int lane) const {
@@ -691,8 +801,13 @@ void MobaGame::OnInput(eng::Engine& e) {
     if (!overPanel && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
         player_->moveOrder = e.GroundPoint(); player_->hasMoveOrder = true;
     }
-    if (IsKeyPressed(KEY_Q)) player_->castQ(e.GroundPoint());
-    if (IsKeyPressed(KEY_W)) player_->castW();
+    if (!player_->stunned()) {
+        Vector3 g = e.GroundPoint();
+        if (IsKeyPressed(KEY_Q)) player_->cast(0, g);   // Arcane Bolt
+        if (IsKeyPressed(KEY_W)) player_->cast(1, g);   // Aegis
+        if (IsKeyPressed(KEY_E)) player_->cast(2, g);   // Blink Step
+        if (IsKeyPressed(KEY_R)) player_->cast(3, g);   // Cataclysm (ult)
+    }
 }
 
 void MobaGame::OnFrame(eng::Engine& e, float /*dt*/) {
@@ -785,18 +900,41 @@ void MobaGame::OnRenderHUD() {
         DrawText(d, W - 16 - MeasureText(d, 18), 14, 18, Color{230, 130, 130, 255});
     }
     if (player_) {
-        DrawText(TextFormat("LV %d   HP %d/%d   Gold %d", player_->level,
-                            (int)std::max(0.f, player_->hp), (int)player_->maxHp, player_->gold),
-                 16, H - 56, 20, RAYWHITE);
-        auto cd = [&](const char* k, float v, int x) {
-            DrawText(v <= 0.f ? TextFormat("%s: ready", k) : TextFormat("%s: %.1f", k, v),
-                     x, H - 28, 18, v <= 0.f ? Color{150, 220, 255, 255} : GRAY);
+        Hero& p = *player_;
+        // stats line
+        DrawText(TextFormat("LV %d    Gold %d", p.level, p.gold), 16, H - 92, 20, RAYWHITE);
+        // HP + mana bars
+        auto bar = [&](int y, float frac, Color c, const char* label) {
+            DrawRectangle(16, y, 240, 16, Color{20, 22, 26, 220});
+            DrawRectangle(16, y, (int)(240 * eng::Clampf(frac, 0.f, 1.f)), 16, c);
+            DrawText(label, 20, y + 1, 14, RAYWHITE);
         };
-        cd("Q bolt", player_->qCd, 16);
-        cd("W shield", player_->wCd, 170);
+        bar(H - 66, p.hp / p.maxHp, Color{70, 200, 90, 255},
+            TextFormat("HP %d/%d", (int)std::max(0.f, p.hp), (int)p.maxHp));
+        bar(H - 46, p.mana / p.maxMana, Color{70, 130, 235, 255},
+            TextFormat("MP %d/%d", (int)p.mana, (int)p.maxMana));
+
+        // ability bar (Q/W/E/R)
+        static const char* keys[4] = {"Q", "W", "E", "R"};
+        static const char* names[4] = {"Bolt", "Aegis", "Blink", "Ult"};
+        int slot = 56, gap = 8, total = 4 * slot + 3 * gap;
+        int x0 = W / 2 - total / 2, y0 = H - slot - 12;
+        for (int i = 0; i < 4; ++i) {
+            int x = x0 + i * (slot + gap);
+            bool ready = p.cd[i] <= 0.f && p.mana >= kAbilityCost[i];
+            DrawRectangle(x, y0, slot, slot, Color{24, 28, 34, 235});
+            DrawRectangleLines(x, y0, slot, slot, ready ? Color{120, 200, 255, 255} : Color{70, 74, 82, 255});
+            DrawText(keys[i], x + 5, y0 + 3, 18, ready ? RAYWHITE : GRAY);
+            DrawText(names[i], x + 4, y0 + slot - 16, 12, Color{170, 180, 190, 255});
+            if (p.cd[i] > 0.f) {  // cooldown overlay + seconds
+                int ch = (int)(slot * eng::Clampf(p.cd[i] / 40.f, 0.05f, 1.f));
+                DrawRectangle(x, y0 + slot - ch, slot, ch, Color{0, 0, 0, 150});
+                DrawText(TextFormat("%d", (int)p.cd[i] + 1), x + slot / 2 - 6, y0 + slot / 2 - 10, 20, RAYWHITE);
+            }
+        }
     }
-    DrawText("Right-click move | Q/W | wheel zoom | ~ console | Tab editor | Esc pause",
-             W - 590, H - 28, 16, GRAY);
+    DrawText("RClick move | Q/W/E/R skills | wheel zoom | ~ console | Tab editor | Esc pause",
+             8, 40, 15, Color{150, 155, 165, 200});
 
     if (phase_ != Phase::Playing) {
         DrawRectangle(0, 0, W, H, Color{0, 0, 0, 150});

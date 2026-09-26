@@ -22,14 +22,27 @@ public:
     float respawnTimer = 0.f;
     float barWidth = 28.f;   // screen-space HP bar width
 
+    // status effects
+    float slowTimer = 0.f, slowMul = 1.f;
+    float stunTimer = 0.f;
+    float dotTimer = 0.f, dotTps = 0.f, dotAccum = 0.f;
+    Team  dotFrom = Team::Radiant;
+
     bool alive() const { return hp > 0.f && respawnTimer <= 0.f && !removed; }
+    bool stunned() const { return stunTimer > 0.f; }
+    float speedMul() const { return stunTimer > 0.f ? 0.f : (slowTimer > 0.f ? slowMul : 1.f); }
+    float effSpeed() const { return moveSpeed * speedMul(); }
     virtual bool persistent() const { return false; } // heroes respawn instead of vanishing
     virtual void onDeath(Team /*killer*/) {}
     virtual float damageTakenMult() const { return 1.f; }
 
     void takeDamage(float dmg, Team from);
     void tryAutoAttack();       // auto-attack the nearest enemy in range
-    void combatTick(float dt);  // decrement attack timer + tryAutoAttack
+    void combatTick(float dt);  // status + attack timer + tryAutoAttack
+    void applyStatus(float dt); // tick slow/stun/DoT timers
+    void slow(float dur, float mul);
+    void stun(float dur);
+    void dot(float dur, float tps, Team from);
     void drawHpBar();           // Render2D helper (screen-space bar)
 };
 
