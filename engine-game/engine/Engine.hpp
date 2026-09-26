@@ -2,6 +2,7 @@
 // fixed-timestep main loop. A game module (IGame) is driven by Run().
 #pragma once
 #include "World.hpp"
+#include "Scene.hpp"
 #include "raylib.h"
 #include <string>
 
@@ -19,6 +20,7 @@ public:
     // Accessors for game modules.
     World&    world() { return world_; }
     Camera3D& camera() { return cam_; }
+    Scene&    scene() { return scene_; }
     int  screenW() const { return width_; }
     int  screenH() const { return height_; }
     bool consoleOpen() const { return consoleOpen_; }
@@ -38,6 +40,7 @@ private:
     void renderConsole();
 
     World world_;
+    Scene scene_;
     Camera3D cam_{};
     int width_, height_;
 

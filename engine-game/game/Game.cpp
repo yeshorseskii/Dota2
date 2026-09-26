@@ -41,6 +41,13 @@ static void updateYaw(CombatEntity& u, Vector3 oldPos) {
     if (dx * dx + dz * dz > 1e-6f) u.yaw = atan2f(dx, dz) * RAD2DEG;
 }
 
+// Draw a lit primitive in the current model frame. sph = ellipsoid (sx,sy,sz),
+// cyl/cone grow +Y from base. Kept short since models call it a lot.
+static void P(eng::Prim p, Vector3 pos, Vector3 s, Color c) { g_game->scene().Draw(p, pos, s, c); }
+static void sph(Vector3 pos, Vector3 s, Color c) { P(eng::Prim::Sphere, pos, s, c); }
+static void cyl(Vector3 pos, float rad, float hgt, Color c) { P(eng::Prim::Cylinder, pos, {rad, hgt, rad}, c); }
+static void cone(Vector3 pos, float rad, float hgt, Color c) { P(eng::Prim::Cone, pos, {rad, hgt, rad}, c); }
+
 // Copy tunable stats from a UnitDef onto a live combat entity.
 static void applyDef(CombatEntity& u, const UnitDef& d) {
     u.maxHp = d.hp;
@@ -220,32 +227,37 @@ void Hero::Render() {
     }
 
     const float r = radius, h = height;
-    Color leg = shade(col, 0.55f);
-    Color skin = mix(col, RAYWHITE, 0.75f);
-    Color metal = Color{200, 205, 215, 255};
-    Color trim = shade(col, 0.75f);
+    Color leg = shade(col, 0.5f);
+    Color skin = mix(col, Color{240, 224, 200, 255}, 0.75f);
+    Color metal = Color{205, 210, 220, 255};
+    Color trim = shade(col, 0.8f);
 
     beginModel(pos, yaw);
-    // legs
-    box({-0.42f * r, 0.18f * h, 0}, 0.34f * r, 0.36f * h, 0.36f * r, leg);
-    box({0.42f * r, 0.18f * h, 0}, 0.34f * r, 0.36f * h, 0.36f * r, leg);
-    // torso
-    box({0, 0.55f * h, 0}, 1.15f * r, 0.42f * h, 0.72f * r, col);
-    boxEdge({0, 0.55f * h, 0}, 1.15f * r, 0.42f * h, 0.72f * r, shade(col, 0.6f));
-    // belt
-    box({0, 0.36f * h, 0}, 1.18f * r, 0.06f * h, 0.75f * r, trim);
-    // shoulders
-    DrawSphere({-0.72f * r, 0.72f * h, 0}, 0.34f * r, trim);
-    DrawSphere({0.72f * r, 0.72f * h, 0}, 0.34f * r, trim);
-    // head + visor
-    DrawSphere({0, 0.9f * h, 0}, 0.32f * r, skin);
-    box({0, 0.9f * h, 0.26f * r}, 0.4f * r, 0.12f * h, 0.14f * r, shade(col, 0.5f));
-    // sword in right hand
-    box({0.95f * r, 0.62f * h, 0.1f * r}, 0.1f * r, 0.72f * h, 0.1f * r, metal);
-    box({0.95f * r, 0.30f * h, 0.1f * r}, 0.34f * r, 0.05f * h, 0.18f * r, trim); // crossguard
-    // shield on left (glows while W active)
-    Color sh = shieldTimer > 0.f ? Color{120, 220, 255, 255} : shade(col, 0.85f);
-    box({-0.95f * r, 0.6f * h, 0.05f * r}, 0.12f * r, 0.42f * h, 0.5f * r, sh);
+    // legs (tapered) + boots
+    cyl({-0.38f * r, 0.0f, 0}, 0.2f * r, 0.5f * h, leg);
+    cyl({0.38f * r, 0.0f, 0}, 0.2f * r, 0.5f * h, leg);
+    sph({-0.38f * r, 0.03f * h, 0.08f * r}, {0.24f * r, 0.16f * r, 0.34f * r}, shade(leg, 0.7f));
+    sph({0.38f * r, 0.03f * h, 0.08f * r}, {0.24f * r, 0.16f * r, 0.34f * r}, shade(leg, 0.7f));
+    // torso (ellipsoid) + chest plate
+    sph({0, 0.66f * h, 0}, {0.62f * r, 0.34f * h, 0.44f * r}, col);
+    sph({0, 0.7f * h, 0.16f * r}, {0.5f * r, 0.26f * h, 0.32f * r}, trim);
+    // shoulders + arms
+    sph({-0.62f * r, 0.84f * h, 0}, {0.26f * r, 0.24f * r, 0.26f * r}, trim);
+    sph({0.62f * r, 0.84f * h, 0}, {0.26f * r, 0.24f * r, 0.26f * r}, trim);
+    cyl({-0.66f * r, 0.4f * h, 0}, 0.15f * r, 0.42f * h, leg);
+    cyl({0.66f * r, 0.4f * h, 0}, 0.15f * r, 0.42f * h, leg);
+    // neck, head, helmet crest
+    sph({0, 0.98f * h, 0}, {0.28f * r, 0.32f * r, 0.28f * r}, skin);
+    sph({0, 1.0f * h, 0.12f * r}, {0.3f * r, 0.26f * r, 0.24f * r}, trim); // helmet
+    cone({0, 1.12f * h, 0}, 0.14f * r, 0.28f * h, mix(col, RAYWHITE, 0.3f));
+    // sword: blade + tip + crossguard, held in right hand
+    Color blade = metal;
+    cyl({0.78f * r, 0.35f * h, 0.28f * r}, 0.05f * r, 0.85f * h, blade);
+    cone({0.78f * r, 1.2f * h, 0.28f * r}, 0.06f * r, 0.16f * h, blade);
+    sph({0.78f * r, 0.33f * h, 0.28f * r}, {0.22f * r, 0.05f * h, 0.1f * r}, trim);
+    // round shield on left arm (glows while W shield is active)
+    Color sh = shieldTimer > 0.f ? Color{130, 225, 255, 255} : mix(col, metal, 0.4f);
+    sph({-0.8f * r, 0.6f * h, 0.14f * r}, {0.12f * r, 0.34f * r, 0.4f * r}, sh);
     endModel();
 }
 
@@ -290,19 +302,23 @@ void Creep::Render() {
     Color col = TeamColor(team);
     const float r = radius, h = height;
     Color leg = shade(col, 0.5f);
+    Color belly = mix(col, RAYWHITE, 0.25f);
     beginModel(pos, yaw);
-    // little legs
-    for (float sx : {-0.5f, 0.5f})
-        for (float sz : {-0.5f, 0.5f})
-            box({sx * r, 0.12f * h, sz * r}, 0.22f * r, 0.24f * h, 0.22f * r, leg);
-    // body
-    box({0, 0.5f * h, 0}, 1.15f * r, 0.5f * h, 1.35f * r, col);
-    boxEdge({0, 0.5f * h, 0}, 1.15f * r, 0.5f * h, 1.35f * r, shade(col, 0.6f));
-    // head poking forward
-    box({0, 0.62f * h, 0.85f * r}, 0.8f * r, 0.42f * h, 0.5f * r, shade(col, 1.1f));
-    // eyes
-    DrawSphere({-0.22f * r, 0.72f * h, 1.05f * r}, 0.09f * r, Color{20, 20, 20, 255});
-    DrawSphere({0.22f * r, 0.72f * h, 1.05f * r}, 0.09f * r, Color{20, 20, 20, 255});
+    // four stubby legs
+    for (float sx : {-0.45f, 0.45f})
+        for (float sz : {-0.4f, 0.45f})
+            cyl({sx * r, 0.f, sz * r}, 0.16f * r, 0.28f * h, leg);
+    // rounded body + belly
+    sph({0, 0.55f * h, 0}, {0.62f * r, 0.4f * h, 0.72f * r}, col);
+    sph({0, 0.42f * h, 0.1f * r}, {0.5f * r, 0.28f * h, 0.55f * r}, belly);
+    // head poking forward + snout
+    sph({0, 0.66f * h, 0.7f * r}, {0.42f * r, 0.36f * r, 0.42f * r}, mix(col, RAYWHITE, 0.1f));
+    cone({0, 0.62f * h, 1.05f * r}, 0.18f * r, 0.3f * r, shade(col, 1.1f));
+    // ears (cones) + eyes
+    cone({-0.22f * r, 0.9f * h, 0.65f * r}, 0.1f * r, 0.28f * r, leg);
+    cone({0.22f * r, 0.9f * h, 0.65f * r}, 0.1f * r, 0.28f * r, leg);
+    sph({-0.2f * r, 0.72f * h, 0.98f * r}, {0.08f * r, 0.08f * r, 0.08f * r}, Color{15, 15, 15, 255});
+    sph({0.2f * r, 0.72f * h, 0.98f * r}, {0.08f * r, 0.08f * r, 0.08f * r}, Color{15, 15, 15, 255});
     endModel();
 }
 
@@ -322,23 +338,25 @@ void Tower::Update(float dt) {
 void Tower::Render() {
     Color col = TeamColor(team);
     const float r = radius, h = height;
-    Color stone = mix(Color{120, 120, 130, 255}, col, 0.35f);
+    Color stone = mix(Color{125, 125, 135, 255}, col, 0.3f);
     Color dark = shade(stone, 0.7f);
     beginModel(pos, 0.f);
-    // base + shaft (tapered stack)
-    box({0, 0.12f * h, 0}, 2.0f * r, 0.24f * h, 2.0f * r, dark);
-    box({0, 0.5f * h, 0}, 1.5f * r, 0.6f * h, 1.5f * r, stone);
-    boxEdge({0, 0.5f * h, 0}, 1.5f * r, 0.6f * h, 1.5f * r, shade(stone, 0.6f));
-    // crown platform
-    box({0, 0.86f * h, 0}, 1.9f * r, 0.1f * h, 1.9f * r, dark);
-    // crenellations
-    for (float sx : {-0.7f, 0.7f})
-        for (float sz : {-0.7f, 0.7f})
-            box({sx * r, 0.95f * h, sz * r}, 0.34f * r, 0.14f * h, 0.34f * r, stone);
-    // glowing crystal on top (bright team color, bobs)
-    float bob = 0.06f * h * sinf((float)GetTime() * 2.f);
-    Color glow = mix(col, RAYWHITE, 0.35f);
-    DrawSphereEx({0, 1.05f * h + bob, 0}, 0.42f * r, 6, 6, glow);
+    // stepped round base
+    cyl({0, 0.0f, 0}, 1.05f * r, 0.16f * h, dark);
+    cyl({0, 0.14f * h, 0}, 0.9f * r, 0.62f * h, stone);
+    // battlement ring + crenellations
+    cyl({0, 0.74f * h, 0}, 0.98f * r, 0.1f * h, dark);
+    for (int i = 0; i < 8; ++i) {
+        float a = i / 8.f * 2.f * PI;
+        sph({cosf(a) * 0.9f * r, 0.84f * h, sinf(a) * 0.9f * r},
+            {0.16f * r, 0.12f * h, 0.16f * r}, stone);
+    }
+    // conical roof
+    cone({0, 0.84f * h, 0}, 0.8f * r, 0.4f * h, shade(col, 0.85f));
+    // glowing crystal on top (bobs)
+    float bob = 0.05f * h * sinf((float)GetTime() * 2.f);
+    Color glow = mix(col, RAYWHITE, 0.4f);
+    sph({0, 1.12f * h + bob, 0}, {0.34f * r, 0.5f * r, 0.34f * r}, glow);
     endModel();
 }
 
@@ -370,27 +388,31 @@ void Ancient::Render() {
     DrawCircle3D(ring, r + 1.5f, Vector3{1, 0, 0}, 90.f, shade(col, 0.8f));
 
     beginModel(pos, 0.f);
-    // stepped pyramid
-    box({0, 0.10f * h, 0}, 2.0f * r, 0.20f * h, 2.0f * r, shade(stone, 0.75f));
-    box({0, 0.30f * h, 0}, 1.5f * r, 0.20f * h, 1.5f * r, stone);
-    box({0, 0.48f * h, 0}, 1.05f * r, 0.18f * h, 1.05f * r, shade(stone, 1.1f));
-    // four pillars
-    for (float sx : {-0.65f, 0.65f})
-        for (float sz : {-0.65f, 0.65f})
-            box({sx * r, 0.62f * h, sz * r}, 0.2f * r, 0.34f * h, 0.2f * r, shade(stone, 0.85f));
+    // round tiered temple base
+    cyl({0, 0.0f, 0}, 1.15f * r, 0.16f * h, shade(stone, 0.7f));
+    cyl({0, 0.15f * h, 0}, 0.92f * r, 0.16f * h, stone);
+    cyl({0, 0.30f * h, 0}, 0.68f * r, 0.14f * h, shade(stone, 1.1f));
+    // ring of pillars
+    for (int i = 0; i < 8; ++i) {
+        float a = i / 8.f * 2.f * PI;
+        cyl({cosf(a) * 0.8f * r, 0.42f * h, sinf(a) * 0.8f * r}, 0.1f * r, 0.34f * h, shade(stone, 0.85f));
+    }
+    // roof ring
+    cyl({0, 0.76f * h, 0}, 0.72f * r, 0.06f * h, shade(stone, 0.75f));
     endModel();
 
-    // floating rotating crystal core
+    // floating rotating crystal core (lit + a bright unlit core for glow)
     float t = (float)GetTime();
     float bob = 0.5f + 0.25f * sinf(t * 1.5f);
-    Vector3 core{pos.x, h * 0.9f + bob, pos.z};
+    Vector3 core{pos.x, h * 0.95f + bob, pos.z};
+    Color glow = dead ? DARKGRAY : mix(col, RAYWHITE, 0.55f);
     rlPushMatrix();
     rlTranslatef(core.x, core.y, core.z);
     rlRotatef(t * 40.f, 0, 1, 0);
-    Color glow = dead ? DARKGRAY : mix(col, RAYWHITE, 0.5f);
-    DrawSphereEx({0, 0, 0}, 1.3f, 2, 4, glow);          // faceted "diamond"
-    DrawSphereWires({0, 0, 0}, 1.35f, 2, 4, shade(glow, 0.7f));
+    P(eng::Prim::Cone, {0, 0, 0}, {1.5f, 1.6f, 1.5f}, glow);            // upper facet
+    P(eng::Prim::Cone, {0, 0, 0}, {1.5f, -1.6f, 1.5f}, shade(glow, 0.8f)); // lower facet
     rlPopMatrix();
+    if (!dead) DrawSphere(core, 0.5f, mix(col, RAYWHITE, 0.8f));        // bright center
 }
 
 // =================================================================
@@ -575,12 +597,14 @@ void MobaGame::makeGround() {
     UnloadImage(img);
     groundModel_ = LoadModelFromMesh(GenMeshPlane(160, 100, 1, 1));
     groundModel_.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = groundTex_;
+    engine_->scene().ApplyShader(groundModel_);   // ground receives lighting too
     groundReady_ = true;
 }
 
 void MobaGame::OnInit(eng::Engine& e) {
     engine_ = &e; g_game = this;
-    e.background = Color{18, 20, 22, 255};
+    e.background = Color{22, 26, 34, 255};
+    e.scene().SetSun({-0.55f, -1.0f, -0.35f}, Color{255, 246, 228, 255}, Color{140, 146, 158, 255});
     makeGround();
     loadDefs();
     reset();

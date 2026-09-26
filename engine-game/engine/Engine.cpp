@@ -12,6 +12,7 @@ Engine::Engine(int width, int height, const char* title)
     InitWindow(width, height, title);
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // we handle Esc ourselves (console vs quit)
+    scene_.Init();
 
     cam_.up = {0, 1, 0};
     cam_.fovy = 48.f;
@@ -25,7 +26,7 @@ Engine::Engine(int width, int height, const char* title)
     Con::Print("engine console - type 'help' to list cvars/commands");
 }
 
-Engine::~Engine() { CloseWindow(); }
+Engine::~Engine() { scene_.Unload(); CloseWindow(); }
 
 Vector3 Engine::GroundPoint() const {
     Ray r = GetMouseRay(GetMousePosition(), cam_);
@@ -87,6 +88,7 @@ void Engine::Run(IGame& game) {
         float dt = GetFrameTime();
         if (dt > 0.1f) dt = 0.1f;
         game.OnFrame(*this, dt);
+        scene_.Update(cam_);
 
         // --- fixed-timestep simulation (skipped while the game reports paused) ---
         if (game.Paused()) {

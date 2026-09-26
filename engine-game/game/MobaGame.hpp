@@ -43,6 +43,7 @@ public:
     int LaneCount() const { return (int)lane_.size(); }
     Camera3D& Cam() { return engine_->camera(); }
     eng::World& World() { return engine_->world(); }
+    eng::Scene& scene() { return engine_->scene(); }
     Hero* Player() { return player_; }
     void SetWin(Phase p) { if (phase_ == Phase::Playing) phase_ = p; }
 
