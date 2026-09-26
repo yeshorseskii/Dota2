@@ -38,9 +38,10 @@ public:
     void SpawnBeam(Vector3 a, Vector3 b, Color c);
     void SpawnText(Vector3 at, const std::string& s, Color c, float life = 0.8f);
 
-    const std::vector<Vector3>& Lane() const { return lane_; }
-    Vector3 LaneWp(int step) const;
-    int LaneCount() const { return (int)lane_.size(); }
+    Vector3 LaneWp(int lane, int step) const;
+    int LaneCount(int lane) const;
+    int NumLanes() const { return (int)lanes_.size(); }
+    Vector3 MapCenter() const { return {90, 0, 90}; }
     Camera3D& Cam() { return engine_->camera(); }
     eng::World& World() { return engine_->world(); }
     eng::Scene& scene() { return engine_->scene(); }
@@ -66,7 +67,9 @@ private:
     void drawPause();  // pause overlay
 
     eng::Engine* engine_ = nullptr;
-    std::vector<Vector3> lane_;
+    std::vector<std::vector<Vector3>> lanes_;  // top / mid / bottom waypoint paths
+    std::vector<Vector3> trees_;               // decorative jungle props
+    Vector3 bossPit_{90, 0, 118};              // neutral boss location
     Hero* player_ = nullptr;
     Hero* enemy_ = nullptr;
     Ancient* radiantAncient_ = nullptr;

@@ -32,7 +32,8 @@ public:
 
 class Creep : public CombatEntity {
 public:
-    int laneIndex = 0;
+    int lane = 1;        // 0=top, 1=mid, 2=bottom
+    int laneIndex = 0;   // progress along that lane's waypoints
     void Spawn() override;
     void Update(float dt) override;
     void Render() override;

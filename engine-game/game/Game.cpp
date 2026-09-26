@@ -205,7 +205,10 @@ void Hero::Update(float dt) {
             yaw = atan2f(aggro->pos.x - pos.x, aggro->pos.z - pos.z) * RAD2DEG;
         }
     } else {
-        pos = eng::MoveToward(pos, g_game->LaneWp(g_game->LaneCount() - 3), moveSpeed * dt);
+        // push down the mid lane toward the enemy base
+        int midLast = g_game->LaneCount(1) - 1;
+        Vector3 tgt = g_game->LaneWp(1, team == Team::Dire ? 1 : midLast - 1);
+        pos = eng::MoveToward(pos, tgt, moveSpeed * dt);
         updateYaw(*this, o);
     }
 }
@@ -288,13 +291,13 @@ void Creep::Update(float dt) {
         yaw = atan2f(e->pos.x - pos.x, e->pos.z - pos.z) * RAD2DEG;
         return;
     }
-    Vector3 wp = g_game->LaneWp(laneIndex);
+    Vector3 wp = g_game->LaneWp(lane, laneIndex);
     Vector3 o = pos;
     pos = eng::MoveToward(pos, wp, moveSpeed * dt);
     updateYaw(*this, o);
-    if (eng::Dist(pos, wp) < 1.6f) {
+    if (eng::Dist(pos, wp) < 2.0f) {
         laneIndex += (team == Team::Radiant) ? 1 : -1;
-        laneIndex = (int)eng::Clampf((float)laneIndex, 0.f, (float)g_game->LaneCount() - 1);
+        laneIndex = (int)eng::Clampf((float)laneIndex, 0.f, (float)g_game->LaneCount(lane) - 1);
     }
 }
 
@@ -471,9 +474,16 @@ void MobaGame::SpawnText(Vector3 at, const std::string& s, Color c, float life) 
     e->pos = at; e->text = s; e->color = c; e->life = e->maxLife = life;
 }
 
-Vector3 MobaGame::LaneWp(int step) const {
-    int s = (int)eng::Clampf((float)step, 0.f, (float)lane_.size() - 1);
-    return lane_[s];
+int MobaGame::LaneCount(int lane) const {
+    if (lane < 0 || lane >= (int)lanes_.size()) return 0;
+    return (int)lanes_[lane].size();
+}
+
+Vector3 MobaGame::LaneWp(int lane, int step) const {
+    lane = (int)eng::Clampf((float)lane, 0.f, (float)lanes_.size() - 1);
+    const auto& L = lanes_[lane];
+    int s = (int)eng::Clampf((float)step, 0.f, (float)L.size() - 1);
+    return L[s];
 }
 
 CombatEntity* MobaGame::NearestEnemy(Team team, Vector3 pos, float range) {
@@ -519,42 +529,84 @@ void MobaGame::OnKill(CombatEntity& victim, Team killer) {
 }
 
 void MobaGame::spawnMap() {
-    lane_ = {
-        {16, 0, 68}, {34, 0, 60}, {54, 0, 50}, {74, 0, 40},
-        {94, 0, 30}, {112, 0, 20}, {124, 0, 12},
+    // Square map [0..180] x [0..180]. Radiant base bottom-left, Dire top-right.
+    Vector3 rBase{24, 0, 24}, dBase{156, 0, 156};
+
+    // Three lanes: top (up-left then across), mid (diagonal), bottom (across then up).
+    lanes_ = {
+        // TOP: up the left side, then across the top
+        {{24, 0, 40}, {24, 0, 80}, {24, 0, 120}, {30, 0, 150}, {60, 0, 156},
+         {100, 0, 156}, {140, 0, 156}},
+        // MID: diagonal
+        {{38, 0, 38}, {62, 0, 62}, {86, 0, 86}, {110, 0, 110}, {134, 0, 134}},
+        // BOTTOM: across the bottom, then up the right side
+        {{40, 0, 24}, {80, 0, 24}, {120, 0, 24}, {150, 0, 30}, {156, 0, 60},
+         {156, 0, 100}, {156, 0, 140}},
     };
+
     radiantAncient_ = World().Create<Ancient>();
-    radiantAncient_->team = Team::Radiant; radiantAncient_->pos = lane_.front();
+    radiantAncient_->team = Team::Radiant; radiantAncient_->pos = rBase;
     direAncient_ = World().Create<Ancient>();
-    direAncient_->team = Team::Dire; direAncient_->pos = lane_.back();
+    direAncient_->team = Team::Dire; direAncient_->pos = dBase;
 
     auto tower = [&](Team t, Vector3 at) {
         auto* w = World().Create<Tower>(); w->team = t; w->pos = at;
     };
-    tower(Team::Radiant, lane_[2]); tower(Team::Radiant, lane_[1]);
-    tower(Team::Dire, lane_[4]); tower(Team::Dire, lane_[5]);
+    // 3 tiers of towers per lane per side, from waypoints near each base.
+    for (auto& L : lanes_) {
+        int n = (int)L.size();
+        tower(Team::Radiant, L[0]);
+        tower(Team::Radiant, L[n / 4]);
+        tower(Team::Radiant, L[n / 2]);
+        tower(Team::Dire, L[n - 1]);
+        tower(Team::Dire, L[n - 1 - n / 4]);
+        tower(Team::Dire, L[n / 2 + 1 < n ? n / 2 + 1 : n / 2]);
+    }
+    // two guardian towers flanking each ancient
+    tower(Team::Radiant, Vector3Add(rBase, {14, 0, -2}));
+    tower(Team::Radiant, Vector3Add(rBase, {-2, 0, 14}));
+    tower(Team::Dire, Vector3Add(dBase, {-14, 0, 2}));
+    tower(Team::Dire, Vector3Add(dBase, {2, 0, -14}));
+
+    // Decorative jungle trees in the four quadrants between the lanes.
+    trees_.clear();
+    auto scatter = [&](float cx, float cz, float spread, int count) {
+        for (int i = 0; i < count; ++i) {
+            float x = cx + (rand() % 1000 / 1000.f - 0.5f) * spread;
+            float z = cz + (rand() % 1000 / 1000.f - 0.5f) * spread;
+            trees_.push_back({x, 0, z});
+        }
+    };
+    scatter(58, 110, 46, 14);   // top-left jungle
+    scatter(122, 70, 46, 14);   // bottom-right jungle
+    scatter(60, 60, 30, 6);     // near radiant
+    scatter(120, 120, 30, 6);   // near dire
 
     player_ = World().Create<Hero>();
     player_->team = Team::Radiant; player_->isPlayer = true;
-    player_->pos = Vector3Add(lane_.front(), Vector3{7, 0, 7});
+    player_->pos = Vector3Add(rBase, Vector3{8, 0, 8});
     player_->spawnPos = player_->pos; player_->moveOrder = player_->pos;
 
     enemy_ = World().Create<Hero>();
     enemy_->team = Team::Dire; enemy_->isPlayer = false;
-    enemy_->pos = Vector3Add(lane_.back(), Vector3{-7, 0, -7});
+    enemy_->pos = Vector3Add(dBase, Vector3{-8, 0, -8});
     enemy_->spawnPos = enemy_->pos; enemy_->moveOrder = enemy_->pos;
 }
 
 void MobaGame::spawnWave() {
     ++waveCount_;
     int n = std::max(1, sv_creeps_per_wave.GetInt());
-    for (int i = 0; i < n; ++i) {
-        Vector3 j{(float)(rand() % 30 - 15) / 6.f, 0, (float)(rand() % 30 - 15) / 6.f};
-        auto* rc = World().Create<Creep>();
-        rc->team = Team::Radiant; rc->pos = Vector3Add(LaneWp(0), j); rc->laneIndex = 1;
-        auto* dc = World().Create<Creep>();
-        dc->team = Team::Dire; dc->pos = Vector3Add(LaneWp(LaneCount() - 1), j);
-        dc->laneIndex = LaneCount() - 2;
+    for (int lane = 0; lane < NumLanes(); ++lane) {
+        int last = LaneCount(lane) - 1;
+        for (int i = 0; i < n; ++i) {
+            Vector3 j{(float)(rand() % 30 - 15) / 6.f, 0, (float)(rand() % 30 - 15) / 6.f};
+            auto* rc = World().Create<Creep>();
+            rc->team = Team::Radiant; rc->lane = lane;
+            rc->pos = Vector3Add(LaneWp(lane, 0), j); rc->laneIndex = 1;
+            auto* dc = World().Create<Creep>();
+            dc->team = Team::Dire; dc->lane = lane;
+            dc->pos = Vector3Add(LaneWp(lane, last), j); dc->laneIndex = last - 1;
+        }
     }
 }
 
@@ -595,7 +647,7 @@ void MobaGame::makeGround() {
     groundTex_ = LoadTextureFromImage(img);
     SetTextureFilter(groundTex_, TEXTURE_FILTER_BILINEAR);
     UnloadImage(img);
-    groundModel_ = LoadModelFromMesh(GenMeshPlane(160, 100, 1, 1));
+    groundModel_ = LoadModelFromMesh(GenMeshPlane(210, 210, 1, 1));
     groundModel_.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = groundTex_;
     engine_->scene().ApplyShader(groundModel_);   // ground receives lighting too
     groundReady_ = true;
@@ -648,18 +700,19 @@ void MobaGame::OnFrame(eng::Engine& e, float /*dt*/) {
 
     // Menu: slow cinematic orbit around the map center.
     if (screen_ == Screen::Menu) {
-        Vector3 mid{70, 0, 40};
-        float t = (float)GetTime() * 0.12f, d2 = 78.f;
+        Vector3 mid = MapCenter();
+        float t = (float)GetTime() * 0.12f, d2 = 120.f;
         c.target = Vector3Lerp(c.target, mid, 0.05f);
-        Vector3 want{mid.x + sinf(t) * d2, d2 * 0.85f, mid.z + cosf(t) * d2};
+        Vector3 want{mid.x + sinf(t) * d2, d2 * 0.9f, mid.z + cosf(t) * d2};
         c.position = Vector3Lerp(c.position, want, 0.05f);
         return;
     }
 
     Vector3 focus = (player_ && player_->alive()) ? player_->pos
-                    : (player_ ? player_->spawnPos : Vector3{70, 0, 40});
-    if (std::getenv("MOBA_SHOT_AT") && !std::getenv("MOBA_SHOT_HERO")) focus = LaneWp(3);
-    float d = cl_cam_dist.GetFloat();
+                    : (player_ ? player_->spawnPos : MapCenter());
+    if (std::getenv("MOBA_SHOT_AT") && !std::getenv("MOBA_SHOT_HERO")) focus = LaneWp(1, 2);
+    if (std::getenv("MOBA_SHOT_MAP")) focus = MapCenter();
+    float d = std::getenv("MOBA_SHOT_MAP") ? 150.f : cl_cam_dist.GetFloat();
     c.target = Vector3Lerp(c.target, focus, 0.15f);
     c.position = Vector3Lerp(c.position, Vector3Add(c.target, Vector3{0, d, d * 0.62f}), 0.15f);
 }
@@ -673,18 +726,49 @@ void MobaGame::OnTick(eng::World& w) {
 }
 
 void MobaGame::OnRender3D() {
-    if (groundReady_) DrawModel(groundModel_, Vector3{70, 0, 40}, 1.0f, WHITE);
-    else DrawPlane(Vector3{70, 0, 40}, Vector2{160, 100}, Color{30, 34, 30, 255});
-    if (!lane_.empty()) {
-        DrawCircle3D(lane_.front(), 22.f, Vector3{1, 0, 0}, 90.f, Color{60, 110, 70, 255});
-        DrawCircle3D(lane_.back(), 22.f, Vector3{1, 0, 0}, 90.f, Color{120, 70, 70, 255});
-        // dirt path: overlapping tiles along the lane
-        Color dirt{74, 64, 50, 255};
-        for (int i = 0; i + 1 < (int)lane_.size(); ++i) {
-            Vector3 a = lane_[i], b = lane_[i + 1]; a.y = b.y = 0.06f;
-            DrawCylinderEx(a, b, 3.4f, 3.4f, 14, dirt);
+    Vector3 mid = MapCenter();
+    if (groundReady_) DrawModel(groundModel_, mid, 1.0f, WHITE);
+    else DrawPlane(mid, Vector2{210, 210}, Color{30, 34, 30, 255});
+
+    // River: a translucent band across the centre, perpendicular to the mid lane.
+    rlPushMatrix();
+    rlTranslatef(mid.x, 0.05f, mid.z);
+    rlRotatef(45.f, 0, 1, 0);
+    DrawCube({0, 0, 0}, 230.f, 0.08f, 22.f, Color{60, 110, 150, 150});
+    DrawCube({0, 0.01f, 0}, 230.f, 0.08f, 12.f, Color{90, 150, 190, 130});
+    rlPopMatrix();
+
+    // Lane dirt paths.
+    Color dirt{78, 66, 52, 255};
+    for (auto& L : lanes_) {
+        for (int i = 0; i + 1 < (int)L.size(); ++i) {
+            Vector3 a = L[i], b = L[i + 1]; a.y = b.y = 0.07f;
+            DrawCylinderEx(a, b, 3.2f, 3.2f, 12, dirt);
         }
-        for (auto wp : lane_) { wp.y = 0.06f; DrawCylinder(wp, 3.4f, 3.4f, 0.05f, 18, dirt); }
+        for (auto wp : L) { wp.y = 0.07f; DrawCylinder(wp, 3.2f, 3.2f, 0.04f, 14, dirt); }
+    }
+
+    // Base fountains (glowing pads).
+    if (radiantAncient_) {
+        Vector3 b = radiantAncient_->pos; b.y = 0.08f;
+        DrawCircle3D(b, 12.f, {1, 0, 0}, 90.f, Color{90, 200, 130, 255});
+        scene().Draw(eng::Prim::Cylinder, {b.x, 0, b.z}, {16, 0.3f, 16}, Color{40, 70, 55, 255});
+    }
+    if (direAncient_) {
+        Vector3 b = direAncient_->pos; b.y = 0.08f;
+        DrawCircle3D(b, 12.f, {1, 0, 0}, 90.f, Color{210, 110, 110, 255});
+        scene().Draw(eng::Prim::Cylinder, {b.x, 0, b.z}, {16, 0.3f, 16}, Color{70, 45, 45, 255});
+    }
+
+    // Boss pit: a dark sunken ring.
+    scene().Draw(eng::Prim::Cylinder, {bossPit_.x, 0, bossPit_.z}, {14, 0.2f, 14}, Color{40, 38, 44, 255});
+    DrawCircle3D({bossPit_.x, 0.12f, bossPit_.z}, 8.f, {1, 0, 0}, 90.f, Color{150, 120, 60, 255});
+
+    // Jungle trees (lit): trunk + foliage.
+    for (const Vector3& t : trees_) {
+        scene().Draw(eng::Prim::Cylinder, {t.x, 0, t.z}, {1.1f, 3.2f, 1.1f}, Color{92, 66, 44, 255});
+        scene().Draw(eng::Prim::Cone, {t.x, 2.6f, t.z}, {4.2f, 5.5f, 4.2f}, Color{46, 96, 58, 255});
+        scene().Draw(eng::Prim::Cone, {t.x, 4.6f, t.z}, {3.2f, 4.2f, 3.2f}, Color{54, 110, 66, 255});
     }
 }
 
