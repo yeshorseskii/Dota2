@@ -18,13 +18,17 @@ public:
     float shieldTimer = 0.f;
     float mana = 300.f, maxMana = 300.f, manaRegen = 8.f, hpRegen = 2.f;
     float cd[4] = {0, 0, 0, 0};   // Q, W, E (blink), R (ultimate)
+    float armor = 0.f;            // fractional damage reduction from items
+    int items[6] = {0, 0, 0, 0, 0, 0};  // purchased item counts
 
     void Spawn() override;
     void Update(float dt) override;
     void Render() override;
     void Render2D() override;
     bool persistent() const override { return true; }
-    float damageTakenMult() const override { return shieldTimer > 0.f ? 0.5f : 1.f; }
+    float damageTakenMult() const override {
+        return (shieldTimer > 0.f ? 0.5f : 1.f) * (1.f - armor);
+    }
     void onDeath(Team killer) override;
 
     void cast(int index, Vector3 target);   // Q/W/E/R dispatch
@@ -35,6 +39,9 @@ class Creep : public CombatEntity {
 public:
     int lane = 1;        // 0=top, 1=mid, 2=bottom
     int laneIndex = 0;   // progress along that lane's waypoints
+    bool neutral = false;// jungle camp / boss creep (holds its camp)
+    bool boss = false;   // powerful neutral boss
+    Vector3 camp{};      // leash point for neutrals
     void Spawn() override;
     void Update(float dt) override;
     void Render() override;

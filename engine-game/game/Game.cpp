@@ -68,6 +68,7 @@ static eng::ConVar cl_cam_dist("cl_cam_dist", 54.f, "camera follow distance");
 
 // ------------------------------------------------------------- colors -------
 Color TeamColor(Team t) {
+    if (t == Team::Neutral) return Color{176, 156, 120, 255};   // tan for neutrals
     if (g_game) return g_game->defs().teamColor(t == Team::Radiant);
     return t == Team::Radiant ? Color{86, 196, 112, 255} : Color{214, 84, 84, 255};
 }
@@ -343,7 +344,24 @@ void Creep::Spawn() {
 
 void Creep::Update(float dt) {
     combatTick(dt);
-    // move along the lane unless an enemy is close enough to fight
+
+    if (neutral) {
+        // Hold the camp: fight nearby enemies, otherwise leash back home.
+        if (CombatEntity* e = g_game->NearestEnemy(team, pos, attackRange + (boss ? 4.f : 2.f))) {
+            yaw = atan2f(e->pos.x - pos.x, e->pos.z - pos.z) * RAD2DEG;
+            if (eng::Dist(pos, e->pos) > attackRange * 0.9f && eng::Dist(camp, e->pos) < 26.f) {
+                Vector3 o = pos; pos = eng::MoveToward(pos, e->pos, effSpeed() * dt); updateYaw(*this, o);
+            }
+            return;
+        }
+        if (eng::Dist(pos, camp) > 1.5f) {
+            Vector3 o = pos; pos = eng::MoveToward(pos, camp, effSpeed() * dt); updateYaw(*this, o);
+            if (hp < maxHp) hp = std::min(maxHp, hp + 20.f * dt);   // heal while leashing home
+        }
+        return;
+    }
+
+    // lane creep: fight if an enemy is close, else march the lane
     if (CombatEntity* e = g_game->NearestEnemy(team, pos, attackRange + 2.f)) {
         yaw = atan2f(e->pos.x - pos.x, e->pos.z - pos.z) * RAD2DEG;
         return;
@@ -617,14 +635,21 @@ void MobaGame::AreaDamage(Team from, Vector3 center, float radius, float dmg) {
 }
 
 void MobaGame::OnKill(CombatEntity& victim, Team killer) {
+    if (killer == Team::Neutral) return;   // neutrals award nothing
     int bounty = 0, xp = 0;
+    bool bossKill = false;
     std::string cn = victim.classname;
-    if (cn == "creep")       { bounty = 40;  xp = 45; }
-    else if (cn == "hero")   { bounty = 200; xp = 120; }
-    else if (cn == "tower")  { bounty = 250; xp = 90; }
+    auto* vc = dynamic_cast<Creep*>(&victim);
+    if (vc && vc->neutral) {
+        bossKill = vc->boss;
+        bounty = bossKill ? 450 : 65;
+        xp = bossKill ? 320 : 80;
+    } else if (cn == "creep")  { bounty = 40;  xp = 45; }
+    else if (cn == "hero")     { bounty = 200; xp = 120; }
+    else if (cn == "tower")    { bounty = 250; xp = 90; }
 
     Hero* best = nullptr; float bestD = 1e9f;
-    for (eng::Entity* e : World().FindInRadius(victim.pos, 90.f)) {
+    for (eng::Entity* e : World().FindInRadius(victim.pos, bossKill ? 400.f : 90.f)) {
         auto* h = dynamic_cast<Hero*>(e);
         if (!h || h->team != killer) continue;
         if (h->alive()) h->addXp((float)xp);
@@ -635,6 +660,14 @@ void MobaGame::OnKill(CombatEntity& victim, Team killer) {
         best->gold += bounty;
         SpawnText(Vector3Add(victim.pos, {0, victim.height, 0}),
                   TextFormat("+%d", bounty), Color{255, 215, 0, 255}, 0.9f);
+    }
+    if (bossKill) {
+        // Boss reward: fully restore the killing team's heroes and announce it.
+        if (player_ && player_->team == killer) { player_->hp = player_->maxHp; player_->mana = player_->maxMana; }
+        if (enemy_ && enemy_->team == killer) { enemy_->hp = enemy_->maxHp; enemy_->mana = enemy_->maxMana; }
+        SpawnText(Vector3Add(victim.pos, {0, victim.height + 2.f, 0}), "BOSS SLAIN!",
+                  Color{255, 215, 120, 255}, 1.6f);
+        SpawnRing(victim.pos, 1.f, 20.f, Color{255, 210, 120, 255}, 1.0f);
     }
 }
 
@@ -692,6 +725,9 @@ void MobaGame::spawnMap() {
     scatter(60, 60, 30, 6);     // near radiant
     scatter(120, 120, 30, 6);   // near dire
 
+    // Neutral jungle camps (leash centres).
+    camps_ = {{56, 0, 108}, {124, 0, 72}, {64, 0, 62}, {116, 0, 118}};
+
     player_ = World().Create<Hero>();
     player_->team = Team::Radiant; player_->isPlayer = true;
     player_->pos = Vector3Add(rBase, Vector3{8, 0, 8});
@@ -720,10 +756,62 @@ void MobaGame::spawnWave() {
     }
 }
 
+void MobaGame::spawnCampAt(Vector3 c) {
+    int n = 2 + rand() % 2;   // 2-3 neutrals per camp
+    for (int i = 0; i < n; ++i) {
+        auto* u = World().Create<Creep>();
+        u->team = Team::Neutral; u->neutral = true;
+        u->camp = c;
+        u->pos = Vector3Add(c, {(float)(rand() % 60 - 30) / 10.f, 0, (float)(rand() % 60 - 30) / 10.f});
+        u->radius = 1.4f; u->height = 2.7f; u->barWidth = 34.f;
+        u->maxHp = u->hp = 260.f; u->attackDamage = 18.f; u->attackRange = 6.f;
+        u->attackInterval = 1.1f; u->moveSpeed = 7.f;
+    }
+}
+
+void MobaGame::spawnCamps() {
+    for (const Vector3& c : camps_) spawnCampAt(c);
+}
+
+void MobaGame::spawnBoss() {
+    auto* b = World().Create<Creep>();
+    b->team = Team::Neutral; b->neutral = true; b->boss = true;
+    b->camp = bossPit_; b->pos = bossPit_;
+    b->radius = 3.2f; b->height = 5.2f; b->barWidth = 90.f;
+    b->maxHp = b->hp = 3200.f; b->attackDamage = 72.f; b->attackRange = 9.f;
+    b->attackInterval = 1.0f; b->moveSpeed = 6.f;
+}
+
+int MobaGame::countNeutralsNear(Vector3 c, float r) {
+    int n = 0;
+    for (eng::Entity* e : World().FindInRadius(c, r)) {
+        auto* cr = dynamic_cast<Creep*>(e);
+        if (cr && cr->neutral && cr->alive()) ++n;
+    }
+    return n;
+}
+
+void MobaGame::updateNeutrals(float dt) {
+    neutralTimer_ -= dt;
+    if (neutralTimer_ <= 0.f) {
+        neutralTimer_ = 45.f;   // periodically refill cleared camps
+        for (const Vector3& c : camps_)
+            if (countNeutralsNear(c, 16.f) == 0) spawnCampAt(c);
+    }
+    bossTimer_ -= dt;
+    if (bossTimer_ <= 0.f && countNeutralsNear(bossPit_, 22.f) == 0) {
+        bossTimer_ = 100.f;
+        spawnBoss();
+    }
+}
+
 void MobaGame::reset() {
     World().Clear();
     phase_ = Phase::Playing; waveTimer_ = 3.f; waveCount_ = 0;
+    neutralTimer_ = 8.f; bossTimer_ = 20.f; goldTimer_ = 0.f;
     spawnMap();
+    spawnCamps();
+    spawnBoss();
 }
 
 void MobaGame::loadDefs() {
@@ -772,6 +860,7 @@ void MobaGame::OnInit(eng::Engine& e) {
     reset();
     screen_ = Screen::Menu;              // start on the main menu (match runs behind it)
     if (std::getenv("MOBA_SHOT_EDITOR")) editorOpen_ = true;
+    if (std::getenv("MOBA_SHOT_SHOP")) shopOpen_ = true;
     // For gameplay screenshots, auto-start into the match unless a menu shot is asked.
     if (std::getenv("MOBA_SHOT_AT") && !std::getenv("MOBA_SHOT_MENU")) screen_ = Screen::Game;
 }
@@ -792,12 +881,14 @@ void MobaGame::OnInput(eng::Engine& e) {
 
     if (screen_ != Screen::Game) return;   // menu / pause handle input via buttons
     if (IsKeyPressed(KEY_TAB)) editorOpen_ = !editorOpen_;
+    if (IsKeyPressed(KEY_B)) shopOpen_ = !shopOpen_;
 
     if (phase_ != Phase::Playing) { if (IsKeyPressed(KEY_R)) reset(); return; }
     if (!player_ || !player_->alive()) return;
 
-    // Don't issue move/ability orders when clicking inside the editor panel.
-    bool overPanel = editorOpen_ && GetMousePosition().x < 322.f;
+    // Don't issue move/ability orders when clicking inside an open panel.
+    float mx = GetMousePosition().x;
+    bool overPanel = (editorOpen_ && mx < 322.f) || (shopOpen_ && mx > GetScreenWidth() - 360.f);
     if (!overPanel && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
         player_->moveOrder = e.GroundPoint(); player_->hasMoveOrder = true;
     }
@@ -836,8 +927,17 @@ void MobaGame::OnTick(eng::World& w) {
     // Keep the background match alive while sitting on the menu.
     if (screen_ == Screen::Menu && phase_ != Phase::Playing) { reset(); return; }
     if (phase_ != Phase::Playing) return;
-    waveTimer_ -= w.tickInterval;
+    float dt = w.tickInterval;
+    waveTimer_ -= dt;
     if (waveTimer_ <= 0.f) { waveTimer_ = sv_wave_interval.GetFloat(); spawnWave(); }
+    updateNeutrals(dt);
+    // passive gold income for heroes
+    goldTimer_ += dt;
+    if (goldTimer_ >= 1.f) {
+        goldTimer_ -= 1.f;
+        if (player_ && player_->alive()) player_->gold += 1;
+        if (enemy_ && enemy_->alive()) enemy_->gold += 1;
+    }
 }
 
 void MobaGame::OnRender3D() {
@@ -933,7 +1033,7 @@ void MobaGame::OnRenderHUD() {
             }
         }
     }
-    DrawText("RClick move | Q/W/E/R skills | wheel zoom | ~ console | Tab editor | Esc pause",
+    DrawText("RClick move | Q/W/E/R skills | B shop | wheel zoom | ~ console | Tab editor | Esc pause",
              8, 40, 15, Color{150, 155, 165, 200});
 
     if (phase_ != Phase::Playing) {
@@ -946,6 +1046,7 @@ void MobaGame::OnRenderHUD() {
     }
 
     if (editorOpen_) drawEditor();
+    if (shopOpen_ && screen_ == Screen::Game) drawShop();
     if (screen_ == Screen::Paused) drawPause();
 }
 
@@ -988,6 +1089,50 @@ void MobaGame::drawPause() {
     if (GuiButton({bx, by + 2 * (bh + 12), bw, bh}, "MAIN MENU")) { reset(); screen_ = Screen::Menu; }
     if (GuiButton({bx, by + 3 * (bh + 12), bw, bh}, "QUIT")) engine_->Quit();
     GuiSetStyle(DEFAULT, TEXT_SIZE, 10);
+}
+
+namespace {
+struct ShopItem { const char* name; int cost; };
+const ShopItem kShop[6] = {
+    {"Iron Blade  +12 dmg", 400},
+    {"Vitality Stone  +220 HP", 450},
+    {"Mana Crystal  +160 MP", 400},
+    {"Swift Boots  +6 speed", 350},
+    {"Warding Plate  +12% armor", 520},
+    {"Power Core  +8/120/120", 950},
+};
+}
+
+void MobaGame::drawShop() {
+    if (!player_) return;
+    Hero& p = *player_;
+    int W = GetScreenWidth();
+    float pw = 336, x = W - pw - 12, y = 82, h = 6 * 52 + 64;
+    GuiPanel({x, y, pw, h}, "SHOP  (B to close)");
+    float cx = x + 12, cw = pw - 24, cy = y + 34;
+    DrawText(TextFormat("Gold: %d", p.gold), (int)cx, (int)cy, 20, Color{255, 215, 0, 255});
+    cy += 30;
+    for (int i = 0; i < 6; ++i) {
+        bool afford = p.gold >= kShop[i].cost;
+        DrawText(kShop[i].name, (int)cx, (int)(cy + 6), 16, afford ? RAYWHITE : GRAY);
+        DrawText(TextFormat("x%d", p.items[i]), (int)(cx + cw - 90), (int)(cy + 6), 16, Color{170, 180, 190, 255});
+        GuiSetStyle(DEFAULT, TEXT_SIZE, 16);
+        if (afford && GuiButton({cx + cw - 60, cy, 60, 26}, TextFormat("%d", kShop[i].cost))) {
+            p.gold -= kShop[i].cost; p.items[i]++;
+            switch (i) {
+                case 0: p.attackDamage += 12; break;
+                case 1: p.maxHp += 220; p.hp += 220; break;
+                case 2: p.maxMana += 160; p.mana += 160; break;
+                case 3: p.moveSpeed += 6; break;
+                case 4: p.armor = std::min(0.6f, p.armor + 0.12f); break;
+                case 5: p.attackDamage += 8; p.maxHp += 120; p.hp += 120; p.maxMana += 120; p.mana += 120; break;
+            }
+        }
+        GuiSetStyle(DEFAULT, TEXT_SIZE, 10);
+        cy += 52;
+    }
+    DrawText("Buy items with gold from kills, camps and the boss.",
+             (int)cx, (int)(y + h - 22), 13, Color{150, 160, 170, 255});
 }
 
 // -------------------------------------------------------- character editor --

@@ -64,12 +64,18 @@ private:
     void reset();
     void spawnMap();
     void spawnWave();
+    void spawnCamps();
+    void spawnCampAt(Vector3 c);
+    void spawnBoss();
+    void updateNeutrals(float dt);
+    int  countNeutralsNear(Vector3 c, float r);
     void loadDefs();
     void applyDefsToLiveUnits();
     void drawEditor();
     void makeGround();   // build the procedural ground texture + plane model
     void drawMenu();   // main menu overlay
     void drawPause();  // pause overlay
+    void drawShop();   // item shop overlay
 
     eng::Engine* engine_ = nullptr;
     std::vector<std::vector<Vector3>> lanes_;  // top / mid / bottom waypoint paths
@@ -82,6 +88,12 @@ private:
     Phase phase_ = Phase::Playing;
     float waveTimer_ = 0.f;
     int waveCount_ = 0;
+    std::vector<Vector3> camps_;   // neutral jungle camp centres
+    float neutralTimer_ = 0.f;     // camp respawn countdown
+    float bossTimer_ = 0.f;        // boss respawn countdown
+    float goldTimer_ = 0.f;        // passive gold tick
+    bool shopOpen_ = false;
+    std::string shopMsg_;
 
     Defs defs_;
     std::string defsPath_;    // resolved characters.txt path (for Save)

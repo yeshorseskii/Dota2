@@ -7,7 +7,7 @@
 
 namespace game {
 
-enum class Team { Radiant, Dire };
+enum class Team { Radiant, Dire, Neutral };
 inline Team Enemy(Team t) { return t == Team::Radiant ? Team::Dire : Team::Radiant; }
 Color TeamColor(Team t);
 
