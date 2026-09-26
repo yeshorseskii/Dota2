@@ -26,6 +26,9 @@ public:
     // Mouse ray intersected with the ground plane (y = 0).
     Vector3 GroundPoint() const;
 
+    // Ask the engine to exit after the current frame.
+    void Quit() { shouldQuit_ = true; }
+
     // Background clear color (games may tweak).
     Color background{18, 20, 22, 255};
 

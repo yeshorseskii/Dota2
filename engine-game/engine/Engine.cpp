@@ -22,7 +22,7 @@ Engine::Engine(int width, int height, const char* title)
     if (const char* a = std::getenv("MOBA_SHOT_AT")) shotAt_ = std::atof(a);
     if (const char* f = std::getenv("MOBA_SHOT_FILE")) shotFile_ = f;
 
-    Con::Print("engine console — type 'help' to list cvars/commands");
+    Con::Print("engine console - type 'help' to list cvars/commands");
 }
 
 Engine::~Engine() { CloseWindow(); }
@@ -77,7 +77,7 @@ void Engine::Run(IGame& game) {
         if (IsKeyPressed(KEY_GRAVE)) toggleConsole();
         if (IsKeyPressed(KEY_ESCAPE)) {
             if (consoleOpen_) consoleOpen_ = false;
-            else shouldQuit_ = true;
+            else if (game.OnEscape()) shouldQuit_ = true; // game may handle Esc (pause menu)
         }
 
         // --- input ---
@@ -88,14 +88,18 @@ void Engine::Run(IGame& game) {
         if (dt > 0.1f) dt = 0.1f;
         game.OnFrame(*this, dt);
 
-        // --- fixed-timestep simulation ---
-        accumulator_ += dt;
-        int steps = 0;
-        while (accumulator_ >= world_.tickInterval && steps < 8) {
-            game.OnTick(world_);
-            world_.Simulate();
-            accumulator_ -= world_.tickInterval;
-            ++steps;
+        // --- fixed-timestep simulation (skipped while the game reports paused) ---
+        if (game.Paused()) {
+            accumulator_ = 0.f;
+        } else {
+            accumulator_ += dt;
+            int steps = 0;
+            while (accumulator_ >= world_.tickInterval && steps < 8) {
+                game.OnTick(world_);
+                world_.Simulate();
+                accumulator_ -= world_.tickInterval;
+                ++steps;
+            }
         }
 
         // --- render ---

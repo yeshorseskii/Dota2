@@ -584,15 +584,28 @@ void MobaGame::OnInit(eng::Engine& e) {
     makeGround();
     loadDefs();
     reset();
-    if (std::getenv("MOBA_SHOT_EDITOR")) editorOpen_ = true; // show editor in preview capture
+    screen_ = Screen::Menu;              // start on the main menu (match runs behind it)
+    if (std::getenv("MOBA_SHOT_EDITOR")) editorOpen_ = true;
+    // For gameplay screenshots, auto-start into the match unless a menu shot is asked.
+    if (std::getenv("MOBA_SHOT_AT") && !std::getenv("MOBA_SHOT_MENU")) screen_ = Screen::Game;
+}
+
+bool MobaGame::OnEscape() {
+    if (screen_ == Screen::Menu) return true;         // quit from the menu
+    if (screen_ == Screen::Game) {
+        if (editorOpen_) { editorOpen_ = false; return false; }
+        screen_ = Screen::Paused; return false;       // open pause menu
+    }
+    screen_ = Screen::Game; return false;             // resume from pause
 }
 
 void MobaGame::OnInput(eng::Engine& e) {
-    if (IsKeyPressed(KEY_TAB)) editorOpen_ = !editorOpen_;
-
     float wheel = GetMouseWheelMove();
     if (wheel != 0.f)
         cl_cam_dist.SetFloat(eng::Clampf(cl_cam_dist.GetFloat() - wheel * 3.f, 20.f, 80.f));
+
+    if (screen_ != Screen::Game) return;   // menu / pause handle input via buttons
+    if (IsKeyPressed(KEY_TAB)) editorOpen_ = !editorOpen_;
 
     if (phase_ != Phase::Playing) { if (IsKeyPressed(KEY_R)) reset(); return; }
     if (!player_ || !player_->alive()) return;
@@ -607,16 +620,29 @@ void MobaGame::OnInput(eng::Engine& e) {
 }
 
 void MobaGame::OnFrame(eng::Engine& e, float /*dt*/) {
+    Camera3D& c = e.camera();
+
+    // Menu: slow cinematic orbit around the map center.
+    if (screen_ == Screen::Menu) {
+        Vector3 mid{70, 0, 40};
+        float t = (float)GetTime() * 0.12f, d2 = 78.f;
+        c.target = Vector3Lerp(c.target, mid, 0.05f);
+        Vector3 want{mid.x + sinf(t) * d2, d2 * 0.85f, mid.z + cosf(t) * d2};
+        c.position = Vector3Lerp(c.position, want, 0.05f);
+        return;
+    }
+
     Vector3 focus = (player_ && player_->alive()) ? player_->pos
                     : (player_ ? player_->spawnPos : Vector3{70, 0, 40});
     if (std::getenv("MOBA_SHOT_AT") && !std::getenv("MOBA_SHOT_HERO")) focus = LaneWp(3);
     float d = cl_cam_dist.GetFloat();
-    Camera3D& c = e.camera();
     c.target = Vector3Lerp(c.target, focus, 0.15f);
     c.position = Vector3Lerp(c.position, Vector3Add(c.target, Vector3{0, d, d * 0.62f}), 0.15f);
 }
 
 void MobaGame::OnTick(eng::World& w) {
+    // Keep the background match alive while sitting on the menu.
+    if (screen_ == Screen::Menu && phase_ != Phase::Playing) { reset(); return; }
     if (phase_ != Phase::Playing) return;
     waveTimer_ -= w.tickInterval;
     if (waveTimer_ <= 0.f) { waveTimer_ = sv_wave_interval.GetFloat(); spawnWave(); }
@@ -639,6 +665,8 @@ void MobaGame::OnRender3D() {
 }
 
 void MobaGame::OnRenderHUD() {
+    if (screen_ == Screen::Menu) { drawMenu(); return; }
+
     int W = GetScreenWidth(), H = GetScreenHeight();
     int mm = (int)(engine_->world().time) / 60, ss = (int)(engine_->world().time) % 60;
     DrawText(TextFormat("%02d:%02d   wave %d", mm, ss, waveCount_), W / 2 - 70, 14, 22, RAYWHITE);
@@ -659,8 +687,8 @@ void MobaGame::OnRenderHUD() {
         cd("Q bolt", player_->qCd, 16);
         cd("W shield", player_->wCd, 170);
     }
-    DrawText("Right-click move | Q/W | wheel zoom | ~ console | Tab editor",
-             W - 520, H - 28, 16, GRAY);
+    DrawText("Right-click move | Q/W | wheel zoom | ~ console | Tab editor | Esc pause",
+             W - 590, H - 28, 16, GRAY);
 
     if (phase_ != Phase::Playing) {
         DrawRectangle(0, 0, W, H, Color{0, 0, 0, 150});
@@ -672,6 +700,48 @@ void MobaGame::OnRenderHUD() {
     }
 
     if (editorOpen_) drawEditor();
+    if (screen_ == Screen::Paused) drawPause();
+}
+
+// ------------------------------------------------------------- menus --------
+void MobaGame::drawMenu() {
+    int W = GetScreenWidth(), H = GetScreenHeight();
+    DrawRectangle(0, 0, W, H, Color{10, 12, 14, 150});
+
+    const char* title = "MINI MOBA";
+    int ts = 84;
+    int tw = MeasureText(title, ts);
+    DrawText(title, W / 2 - tw / 2 + 3, 118 + 3, ts, Color{0, 0, 0, 180});   // shadow
+    DrawText(title, W / 2 - tw / 2, 118, ts, Color{120, 220, 150, 255});
+    const char* sub = "engine build - C++ / raylib";
+    DrawText(sub, W / 2 - MeasureText(sub, 22) / 2, 214, 22, Color{180, 190, 200, 255});
+
+    float bw = 300, bh = 52, bx = W / 2.f - bw / 2.f, by = H / 2.f - 30;
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
+    if (GuiButton({bx, by, bw, bh}, "PLAY")) { reset(); screen_ = Screen::Game; }
+    if (GuiButton({bx, by + bh + 14, bw, bh}, "CHARACTER EDITOR")) {
+        reset(); screen_ = Screen::Game; editorOpen_ = true;
+    }
+    if (GuiButton({bx, by + 2 * (bh + 14), bw, bh}, "QUIT")) engine_->Quit();
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 10);
+
+    DrawText("Right-click move  |  Q / W abilities  |  Tab editor  |  ~ console",
+             W / 2 - 270, H - 40, 18, Color{150, 160, 170, 255});
+}
+
+void MobaGame::drawPause() {
+    int W = GetScreenWidth(), H = GetScreenHeight();
+    DrawRectangle(0, 0, W, H, Color{10, 12, 14, 170});
+    const char* t = "PAUSED";
+    DrawText(t, W / 2 - MeasureText(t, 60) / 2, H / 2 - 150, 60, RAYWHITE);
+
+    float bw = 280, bh = 48, bx = W / 2.f - bw / 2.f, by = H / 2.f - 60;
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 22);
+    if (GuiButton({bx, by, bw, bh}, "RESUME")) screen_ = Screen::Game;
+    if (GuiButton({bx, by + bh + 12, bw, bh}, "RESTART")) { reset(); screen_ = Screen::Game; }
+    if (GuiButton({bx, by + 2 * (bh + 12), bw, bh}, "MAIN MENU")) { reset(); screen_ = Screen::Menu; }
+    if (GuiButton({bx, by + 3 * (bh + 12), bw, bh}, "QUIT")) engine_->Quit();
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 10);
 }
 
 // -------------------------------------------------------- character editor --

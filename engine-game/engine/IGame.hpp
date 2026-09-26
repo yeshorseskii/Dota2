@@ -17,6 +17,8 @@ public:
     virtual void OnTick(World& /*w*/) {}    // per fixed tick: waves, win checks, etc.
     virtual void OnRender3D() {}            // extra world-space drawing (map/lane)
     virtual void OnRenderHUD() {}           // screen-space HUD
+    virtual bool OnEscape() { return true; }// Esc pressed: return true to quit, false if handled
+    virtual bool Paused() const { return false; } // when true the engine skips simulation ticks
     virtual const char* Title() const { return "engine game"; }
 };
 

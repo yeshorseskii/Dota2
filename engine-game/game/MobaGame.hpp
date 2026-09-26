@@ -15,6 +15,7 @@ class Hero;
 class Ancient;
 
 enum class Phase { Playing, RadiantWin, DireWin };
+enum class Screen { Menu, Game, Paused };
 
 class MobaGame : public eng::IGame {
 public:
@@ -27,6 +28,8 @@ public:
     void OnTick(eng::World& w) override;
     void OnRender3D() override;
     void OnRenderHUD() override;
+    bool OnEscape() override;
+    bool Paused() const override { return screen_ == Screen::Paused; }
 
     // Services used by entities.
     CombatEntity* NearestEnemy(Team team, Vector3 pos, float range);
@@ -58,6 +61,8 @@ private:
     void applyDefsToLiveUnits();
     void drawEditor();
     void makeGround();   // build the procedural ground texture + plane model
+    void drawMenu();   // main menu overlay
+    void drawPause();  // pause overlay
 
     eng::Engine* engine_ = nullptr;
     std::vector<Vector3> lane_;
@@ -78,6 +83,8 @@ private:
     Texture2D groundTex_{};
     Model groundModel_{};
     bool groundReady_ = false;
+
+    Screen screen_ = Screen::Menu;
 };
 
 extern MobaGame* g_game;
